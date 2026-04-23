@@ -16,7 +16,7 @@ export default function Navbar() {
   };
 
   return (
-    <nav className="bg-slate-900 px-6 py-0 flex items-center justify-between h-14 shadow-lg">
+    <nav className="bg-slate-900 px-6 py-0 flex items-center justify-between h-14 shadow-lg"> 
       <Link href="/" className="text-white font-bold text-base tracking-tight flex items-center gap-2">
         <span className="text-blue-400 text-lg">✈</span>
         <span>Career Relocation Advisor</span>
