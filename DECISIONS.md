@@ -1,123 +1,205 @@
 # Architecture & Design Decisions
 
+---
+
 ## 1. Scope
 
-**Built:**
-- User registration, login, session management (JWT)
-- Plan generation from career profile input (deterministic + LLM)
+### What I built
+
+- User registration, login, and session management (JWT, stateless)
+- Plan generation from a career profile input — deterministic eligibility + LLM narrative
+- Three hard-fail deterministic checks: data coverage, salary shortfall, timeline conflict
+- Structured `data_confidence` ratings on every API response field
 - Saved plans persisted per user (Supabase PostgreSQL via Prisma)
-- Three deterministic edge case checks (timeline conflict, salary shortfall, missing data)
-- LLM narrative generation (Gemini 1.5 Flash, graceful fallback to `null`)
-- Structured `data_confidence` on all API responses
-- Reference data endpoint (`/api/v1/destinations`) — `/api/v1/destinations/[slug]/roles` was removed as dead code; roles are bundled in the destinations list response
-- Full React/Next.js frontend (register, login, generate, plans list, plan detail)
+- Reference data endpoint (`/api/v1/destinations`) — roles are bundled in the list response so the frontend needs only one request
+- Full Next.js frontend: register, login, generate, plans list, plan detail
 
-**Explicitly skipped:**
-- BullMQ / Redis queue for LLM calls
-- Redis response caching
-- PDF export
-- Email verification / password reset
-- Dockerized deployment (documented how to run manually)
+### What I skipped and why
 
----
+| Skipped | Reason |
+|---|---|
+| BullMQ / Redis queue | Adds ops complexity; LLM calls are fast enough at prototype scale. Documented how to add it. |
+| Redis response caching | Same — would cache on `hash(input)`, straightforward to retrofit. |
+| PDF export | UI polish, not core to the plan quality signal. |
+| Email verification / password reset | Out of scope for a take-home; JWT auth works end-to-end. |
+| Dockerized deployment | Added setup instructions instead; Docker would just wrap the same env vars. |
+| Per-destination lazy role loading | Built `/api/v1/destinations/[slug]/roles` but removed it as dead code — bundling roles in the destinations list response is one fewer round trip with no downside at this data size. |
 
-## 1a. Database
-
-**Supabase (PostgreSQL)** is used as the database, connected via Prisma.
-
-- Transaction mode pooler URL (`port 6543`) is used for the application (`DATABASE_URL`) to support serverless/Next.js connection limits
-- Direct connection URL (`port 5432`) is used only for migrations (`DIRECT_URL`)
-- Schema managed via `prisma migrate dev` — `migration_lock.toml` is committed to version control as required by Prisma
+**The core trade-off:** I chose depth on the eligibility engine (three distinct failure modes with typed error codes, structured salary/timeline breakdowns, confidence ratings) over breadth (more destinations, more roles, more UI screens). A plan that gives honest, sourced answers for two destinations is more useful than optimistic answers for ten.
 
 ---
 
-## 2. AI vs Deterministic — The Most Important Decision
+## 2. AI vs. Deterministic Logic
 
-**All eligibility, salary, and timeline decisions are deterministic.** The LLM is never consulted before these checks run. The flow is:
+**All eligibility, salary, and timeline decisions are deterministic. The LLM never touches these.**
+
+The pipeline is strictly ordered:
 
 ```
-1. Data lookup → 404 if destination+role not in data layer
-2. Eligibility filter (work auth constraint)
-3. Salary check (per route) → 422 if all routes fail
-4. Timeline check → 409 if minimum required > user timeline
-5. Build structured plan
-6. LLM call (async, non-blocking)
+1. Data lookup          → 404 DATA_NOT_COVERED if destination+role not in data layer
+2. Work auth filter     → prune routes by user's sponsorship constraint
+3. Salary check         → 422 SALARY_SHORTFALL if salary falls below every eligible route
+4. Timeline check       → 409 TIMELINE_CONFLICT if user timeline < fastest route + hiring minimum
+5. Build structured plan (feasibility, salary assessment, timeline breakdown)
+6. LLM call             → narrative summary + action steps (prose only)
 ```
 
-**Why:** LLMs hallucinate. Telling a user they're eligible for a visa route they don't qualify for is actively harmful. The deterministic checks use verified/estimated JSON data — they are correct by construction. The LLM only writes prose, never makes eligibility decisions.
+### Why this line
 
-**LLM failure mode:** If the LLM times out or returns invalid JSON, `narrative_summary` is `null` and `llm_status` is `"timeout"` or `"error"`. The plan is still complete and usable. This is tested implicitly — any LLM key misconfiguration produces a graceful degraded response, not a 500.
+LLMs hallucinate. Telling a user they qualify for a Skilled Worker Visa when they don't is actively harmful — it could cost them visa application fees, legal advice time, or a job offer. The deterministic layer uses JSON data sourced from government publications and job boards; it is correct by construction.
+
+The LLM's job is to take the already-correct structured output and write a readable summary. It never makes a binary decision.
+
+### Options I considered
+
+**Option A (chosen):** Deterministic first, LLM for prose only.
+- Gives up: richer, context-aware eligibility reasoning the LLM could theoretically provide.
+- Gains: zero hallucination risk on eligibility, instant failure feedback with typed error codes, full plan still usable if LLM is down.
+
+**Option B:** LLM makes all decisions, prompted with data.
+- Gives up: correctness guarantees. Even with a strong system prompt, a model can confidently return wrong salary thresholds or invent visa routes.
+- Gains: potentially richer narrative. Not worth the risk for anything touching legal/financial decisions.
+
+### LLM failure mode
+
+If the LLM times out or returns malformed JSON, `narrative_summary` is `null` and `llm_status` is `"timeout"` or `"error"`. The plan is still complete and fully usable. No 500. The frontend degrades gracefully by hiding the summary section.
 
 ---
 
 ## 3. Data Confidence
 
-Data confidence is set at the individual JSON field level within each destination/role file:
+### The problem
+
+Salary data for "Senior Backend Engineer in Germany" from a job board survey is not the same quality as a visa salary threshold sourced directly from the German Federal Employment Agency. Both are useful, but a user should know which to rely on.
+
+### How it flows
+
+Data confidence is set at the field level inside each destination/role JSON file:
 
 ```json
-"salary": { "data_confidence": "estimated" }
-"work_authorisation_routes[0]": { "data_confidence": "verified" }
+"salary": {
+  "median": 85000,
+  "data_confidence": "estimated"
+},
+"work_authorisation_routes": [
+  {
+    "name": "EU Blue Card",
+    "salary_minimum_eur": 45300,
+    "data_confidence": "verified"
+  }
+]
 ```
 
-At API response time, the engine aggregates these into an `overall` field using the most conservative (lowest trust) level present:
+At plan generation time, the engine reads each field's confidence and aggregates to an `overall` using the most conservative level present:
 
 ```
-verified < estimated < placeholder
+verified → estimated → placeholder   (trust descending)
 ```
 
-The frontend displays per-section confidence badges so users know which parts of their plan to trust most. This matters — "visa route X requires €47,000" being `"verified"` from government sources is very different from `"placeholder"` salary data.
+The API response carries both `overall` and per-field breakdowns:
 
-**Data confidence levels:**
-- `verified`: Sourced from official government publications
-- `estimated`: Derived from job boards, surveys — directionally correct
-- `placeholder`: Synthetic — requires real data before production
+```json
+"data_confidence": {
+  "overall": "estimated",
+  "fields": {
+    "salary": "estimated",
+    "work_authorisation": "verified",
+    "timeline": "estimated",
+    "market_demand": "estimated",
+    "credentials": "estimated"
+  }
+}
+```
+
+The frontend renders a confidence badge per section so users know exactly which parts of the plan to stress-test before acting on them.
+
+### Confidence levels
+
+| Level | Meaning |
+|---|---|
+| `verified` | Sourced from official government publications (e.g., UK Home Office, German BAMF) |
+| `estimated` | Derived from job boards, salary surveys — directionally correct, not authoritative |
+| `placeholder` | Synthetic data — must be replaced with real sourcing before production use |
+
+### What I gave up
+
+Setting confidence at the field level requires discipline when adding new destination data. A simpler approach (one confidence level per destination file) would be easier to maintain but loses the nuance — a file can have verified visa thresholds and estimated salary data at the same time.
 
 ---
 
 ## 4. LLM Choice
 
-**Primary: Gemini** (free tier, model: `gemini-3.1-flash-lite-preview`)
-- Reasons: generous free tier, large context window (supports full plan JSON input), fast inference, good instruction-following
+### Options considered
+
+| Model | Reason considered | Reason rejected |
+|---|---|---|
+| GPT-4o | Best narrative quality | Requires paid OpenAI account — reviewers couldn't run it |
+| Groq (Llama 3 70B) | Fast, free tier | Free tier rate limits are tight; context window smaller |
+| Gemini Flash (chosen) | Generous free tier, 1M token context, fast | Occasionally verbose JSON output needs post-processing |
+| Ollama (local fallback) | Zero cost, fully private | Requires local install; not portable for reviewers |
+
+### What I chose and why
+
+**Primary: Gemini** (`gemini-3.1-flash-lite-preview` via Google AI Studio free tier)
+
+- Context window is large enough to pass the full plan JSON as input without chunking
+- Reliable JSON output mode — the prompt asks for structured JSON, Gemini follows it consistently
+- Free tier is generous enough for repeated reviewer runs without hitting rate limits
 - Configured via `LLM_PROVIDER=gemini` + `LLM_API_KEY`
-- Model name is intentionally not surfaced in the UI
 
 **Fallback: Ollama (local Llama 3)**
-- Reasons: zero API cost, fully private, no rate limits
-- Requires local Ollama install: `ollama pull llama3`
-- Configured via `LLM_PROVIDER=ollama`
 
-**Why not GPT-4:** Requires paid OpenAI account. Not appropriate for a take-home where reviewers need to run it.
-**Why not Groq:** Groq was initially planned but dropped — Gemini's free tier is more generous and the context window is better. Groq can be added as a provider trivially (same interface).
+- Configured via `LLM_PROVIDER=ollama` — requires `ollama pull llama3` locally
+- Zero API cost, fully private, no rate limits
+- Narrative quality is lower than Gemini but the structured data is unaffected
+
+### Limitations I worked around
+
+- Gemini sometimes wraps JSON output in markdown code fences — the service strips these before parsing
+- The model name is intentionally not surfaced in the UI; it is implementation detail
+- If the LLM returns invalid JSON after stripping, the engine falls back to deterministic action steps built from the data layer — the plan is never empty
 
 ---
 
 ## 5. Scale Assumption
 
-**This implementation is single-instance and does not scale horizontally under real load.**
+**The single assumption that breaks first under real load: unbounded concurrent LLM calls.**
 
-Known gaps (with documented fixes):
+Every `/api/v1/plans/generate` request makes a live LLM API call synchronously. Under concurrent load:
 
-| Gap | Current State | Production Fix |
-|---|---|---|
-| LLM rate limiting | No per-user throttle | Rate limiter middleware + Redis token bucket |
-| Concurrent LLM calls | All go through simultaneously | BullMQ queue (Redis-backed) with concurrency: 5 |
-| Identical input caching | Each request re-calls LLM | Redis cache on `hash(input)` with TTL |
-| Horizontal scaling | Single instance | Stateless JWT + load balancer already possible |
+- 50 simultaneous users → 50 simultaneous Gemini API calls
+- Gemini free tier rate-limits at ~15 RPM → queue backs up, timeouts cascade
+- Each request holds an open Next.js serverless function for up to 15 seconds
 
-The JWT-based auth is stateless by design, so horizontal scaling is architecturally possible — just not implemented.
+### What breaks and when
+
+| Load level | Behaviour |
+|---|---|
+| 1–5 concurrent users | Works fine, ~3–8s response |
+| 10–20 concurrent users | Gemini rate limit hit, LLM calls start timing out, plans degrade to no narrative |
+| 50+ concurrent users | Function timeout backpressure, DB connection pool exhaustion likely |
+
+### The fix (not implemented)
+
+```
+Request → BullMQ queue (Redis) → Worker pool (concurrency: 5) → Gemini API
+```
+
+The deterministic checks run instantly outside the queue. Only the LLM call is queued. Users get a job ID back immediately and poll for completion. The JWT-based auth is already stateless, so horizontal scaling of the web layer is architecturally possible without further changes.
 
 ---
 
-## 6. Hindsight / Genuine Reflection
+## 6. Hindsight
 
-**What I'd do differently:**
+**The one decision I would make differently: seed destination data into the database, not JSON files.**
 
-1. **Seed the data layer into PostgreSQL on first boot** rather than reading JSON files at runtime. This would allow: querying `SELECT DISTINCT destination FROM route_data`, better indexing, and admin-side data editing without deploy cycles. JSON files are fine for a prototype but create a maintenance burden as destinations scale.
+Currently, the data layer is a folder of JSON files read from disk at runtime (`data/destinations/{slug}/{role}.json`). This was the right call to move fast — no schema design, no seed scripts, easy to edit. But it has a compounding maintenance cost:
 
-2. **Add a `prisma migrate deploy` health check at startup** so the app fails fast with a clear message if the DB schema is behind, rather than failing mysteriously at the first DB query. Currently migrations must be run manually via `npx prisma migrate deploy` before deploying.
+- Adding a new destination requires a file system change and a deploy
+- There is no way to query "which destinations support role X" without reading every file
+- The frontend destination list is a manually maintained `index.json` that can drift from the actual files
+- An admin interface to update salary data or add routes is impossible without direct file system access
 
-3. **Set up BullMQ from day one.** Adding a queue after the fact requires refactoring the `PlansController → PlansService → RelocationEngineService` call chain. It's a small refactor but easier to build queue-aware from the start.
+The correct architecture is to seed this data into PostgreSQL on first boot (or via a seed script) with a proper schema: `destinations`, `roles`, `work_auth_routes`, `salary_data` tables. Prisma already manages the DB — adding these tables is a small migration. This would make the destination list queryable, the data editable via an admin UI, and the confidence ratings filterable (e.g., "show only verified data").
 
-4. **The LLM prompt could be much better.** The current prompt asks for JSON output from Gemini which works reliably, but a few-shot example would dramatically improve narrative quality. I'd add 2–3 high-quality example plan narratives as few-shot prompts.
-
-5. **Tests on the deterministic checkers only** (as scoped). The `TimelineCheckerService`, `SalaryCheckerService`, and `EligibilityCheckerService` are pure functions that are trivial to unit test exhaustively. I'd add 15–20 parameterized tests covering all the edge cases (exact threshold, 1 below threshold, timeline exactly at minimum, etc.).
+I didn't do this because the JSON approach unblocked everything else immediately. But it is the decision that creates the most friction as the product scales.
