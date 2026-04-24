@@ -1,176 +1,328 @@
 # Career Relocation Advisor
 
-A full-stack web application that generates personalised, data-backed career relocation plans for professionals seeking to work internationally.
+A full-stack web app that generates personalised, data-backed career relocation
+plans for professionals considering an international move. Given an origin,
+destination, target role, salary expectation, timeline, and work-authorisation
+situation, the system runs deterministic feasibility checks against curated
+country/role data, then uses an LLM to produce a narrative summary and ranked
+action plan.
+
+This is a **single Next.js 16 application** — API routes (under
+`src/app/api/v1/`) and the UI live in the same project and run on the same
+port.
+
+---
 
 ## Tech Stack
 
-| Layer | Technology |
-|---|---|
-| Backend | NestJS 11, TypeScript |
-| Database | PostgreSQL (Supabase), Prisma 7 |
-| Auth | JWT (passport-jwt), bcrypt |
-| LLM | Gemini 1.5 Flash (free tier) or Ollama |
-| Frontend | Next.js 16, React 19, Tailwind CSS |
-| Validation | class-validator, Zod |
+| Layer            | Technology                                         |
+| ---------------- | -------------------------------------------------- |
+| Framework        | Next.js 16 (App Router) + React 19                 |
+| Language         | TypeScript 5                                       |
+| API              | Next.js Route Handlers under `/api/v1/*`           |
+| Database         | PostgreSQL (tested with Supabase)                  |
+| ORM              | Prisma 6                                           |
+| Auth             | `jsonwebtoken` + `bcrypt` (JWT via `Authorization: Bearer`) |
+| LLM              | Google Gemini (`@google/generative-ai`)            |
+| State management | Zustand                                            |
+| Forms            | React Hook Form + Zod                              |
+| Styling          | Tailwind CSS v4                                    |
+| HTTP client      | Axios                                              |
+
+---
 
 ## Prerequisites
 
-- Node.js 20+
-- PostgreSQL database (Supabase free tier works)
-- Gemini API key (free — get one at [aistudio.google.com](https://aistudio.google.com))
+- **Node.js 20+**
+- A **PostgreSQL** database — a free Supabase project works out of the box
+- A **Gemini API key** (optional but recommended) — get one at
+  [aistudio.google.com](https://aistudio.google.com). Without a key the app
+  still runs; plan generation falls back to a deterministic action plan and
+  the narrative summary will be `null`.
 
-## Setup Instructions
+---
 
-### 1. Clone and install dependencies
-
-```bash
-# Backend
-cd api
-npm install
-
-# Frontend
-cd ../web
-npm install
-```
-
-### 2. Configure backend environment
+## Quick Start
 
 ```bash
-cd api
+# 1. Clone and install
+git clone <this-repo> ghix-task
+cd ghix-task
+npm install   # runs `prisma generate` automatically via postinstall
+
+# 2. Configure environment
 cp .env.example .env
-```
+#   → open .env and fill in DATABASE_URL, JWT_SECRET, LLM_API_KEY
 
-Edit `api/.env`:
-```env
-DATABASE_URL="your-postgresql-connection-url"
-JWT_SECRET="a-long-random-string"
-JWT_EXPIRES_IN="7d"
-LLM_PROVIDER="gemini"
-LLM_API_KEY="your-gemini-api-key"
-PORT=3001
-```
+# 3. Run database migrations
+npx prisma migrate deploy
 
-### 3. Run database migration
-
-```bash
-cd api
-npx prisma migrate dev --name init
-```
-
-This creates the `users` and `plans` tables.
-
-### 4. Configure frontend environment
-
-Create `web/.env.local`:
-```env
-NEXT_PUBLIC_API_URL=http://localhost:3001/api/v1
-```
-
-### 5. Start both servers
-
-```bash
-# Terminal 1 — backend
-cd api
-npm run start:dev
-
-# Terminal 2 — frontend
-cd web
+# 4. Start the dev server
 npm run dev
 ```
 
-- Backend: http://localhost:3001
-- Frontend: http://localhost:3000
+Open [http://localhost:3000](http://localhost:3000).
 
-## Using Ollama (no API key required)
+The API is served from the same process at
+[http://localhost:3000/api/v1](http://localhost:3000/api/v1).
 
-If you'd prefer not to use a Gemini API key:
+---
+
+## Environment Variables
+
+All variables live in a single `.env` file at the repo root. A template is
+provided in `.env.example`.
+
+| Variable              | Required      | Default                           | Description                                                                                                          |
+| --------------------- | ------------- | --------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`        | **yes**       | —                                 | Postgres connection string used by Prisma at runtime. For Supabase, use the **pooled** (port 6543) connection string. |
+| `DIRECT_URL`          | recommended   | —                                 | Direct (non-pooled) Postgres URL used by Prisma for migrations. For Supabase, use the direct (port 5432) URL. Can be set equal to `DATABASE_URL` for non-pooled setups. |
+| `JWT_SECRET`          | **yes**       | —                                 | Secret used to sign JWTs. Use a long random string (e.g. `openssl rand -hex 48`).                                     |
+| `JWT_EXPIRES_IN`      | no            | `7d`                              | JWT lifetime. Accepts [ms](https://github.com/vercel/ms) format, e.g. `15m`, `24h`, `7d`.                              |
+| `LLM_API_KEY`         | no            | _(unset)_                         | Google Gemini API key. If missing, the LLM step is skipped and a deterministic fallback action plan is returned.      |
+| `LLM_MODEL`           | no            | `gemini-3.1-flash-lite-preview`   | Gemini model name.                                                                                                   |
+| `NEXT_PUBLIC_API_URL` | no            | `/api/v1`                         | Base URL the frontend uses to call the API. Only override this if you proxy the API to a different host.             |
+
+---
+
+## Database Setup
+
+The schema (`prisma/schema.prisma`) defines two tables:
+
+- `users` — email + bcrypt password hash
+- `plans` — saved plans, each owned by a user, storing the request (`input_snapshot`) and the full generated response (`output_snapshot`) as JSON
+
+An initial migration is already committed under `prisma/migrations/`. To apply
+it to a fresh database:
 
 ```bash
-# Install Ollama: https://ollama.ai
-ollama pull llama3
-
-# In api/.env:
-LLM_PROVIDER="ollama"
-OLLAMA_BASE_URL="http://localhost:11434"
-# Leave LLM_API_KEY empty
+npx prisma migrate deploy
 ```
 
-Note: Without any LLM configured, the plan still generates fully — only the narrative summary will be `null`.
+When developing and changing the schema:
 
-## API Overview
+```bash
+npx prisma migrate dev --name <change-name>
+```
 
-All endpoints are prefixed with `/api/v1`.
+Handy extras:
+
+```bash
+npx prisma studio    # GUI for browsing rows
+npx prisma generate  # regenerate the Prisma client (runs automatically on install)
+```
+
+---
+
+## Scripts
+
+Defined in `package.json`:
+
+| Command              | Purpose                                         |
+| -------------------- | ----------------------------------------------- |
+| `npm run dev`        | Start Next.js in development mode on port 3000. |
+| `npm run build`      | Production build.                               |
+| `npm run start`      | Run the production build.                       |
+| `npm run lint`       | Run ESLint.                                     |
+
+---
+
+## API Reference
+
+All endpoints are prefixed with **`/api/v1`**. Success responses are shaped as:
+
+```json
+{ "success": true, "data": { ... }, "meta": { "generated_at": "..." } }
+```
+
+Errors are shaped as:
+
+```json
+{ "success": false, "error": { "code": "ERROR_CODE", "message": "..." } }
+```
+
+Protected endpoints require `Authorization: Bearer <access_token>`.
 
 ### Authentication
-| Method | Path | Description |
-|---|---|---|
-| POST | `/auth/register` | Register with email + password |
-| POST | `/auth/login` | Login, returns JWT |
-| GET | `/auth/me` | Get current user |
 
-### Plans (JWT required)
-| Method | Path | Description |
-|---|---|---|
-| POST | `/plans/generate` | Generate a plan (not saved) |
-| POST | `/plans` | Save a generated plan |
-| GET | `/plans` | List saved plans |
-| GET | `/plans/:id` | Get a saved plan |
-| DELETE | `/plans/:id` | Delete a plan |
+| Method | Path             | Auth    | Description                                        |
+| ------ | ---------------- | ------- | -------------------------------------------------- |
+| POST   | `/auth/register` | public  | Create an account. Returns `{ user, access_token }`. Password must be ≥ 8 chars. |
+| POST   | `/auth/login`    | public  | Log in. Returns `{ user, access_token }`.          |
+| POST   | `/auth/logout`   | public  | Stateless stub — clients simply drop their token.  |
+| GET    | `/auth/me`       | **JWT** | Return the authenticated user's profile.           |
 
-### Reference Data (public)
-| Method | Path | Description |
-|---|---|---|
-| GET | `/destinations` | List supported destinations + roles |
-| GET | `/destinations/:slug/roles` | List roles for a destination |
+### Destinations (reference data)
 
+| Method | Path            | Auth   | Description                                                    |
+| ------ | --------------- | ------ | -------------------------------------------------------------- |
+| GET    | `/destinations` | public | Returns the full index of supported destinations and roles.     |
 
-### Edge Case: Timeline Conflict (1 month)
+### Plans
 
-```bash
-# Change timeline_months to 1 in Scenario A → 409 TIMELINE_CONFLICT
+| Method | Path              | Auth    | Description                                                                                     |
+| ------ | ----------------- | ------- | ----------------------------------------------------------------------------------------------- |
+| POST   | `/plans/generate` | **JWT** | Generate a relocation plan. **Does not persist** — returns the result only.                      |
+| POST   | `/plans`          | **JWT** | Save a generated plan (`{ title?, input_snapshot, output_snapshot }`).                           |
+| GET    | `/plans`          | **JWT** | List the current user's saved plans. Supports `?page=` and `?limit=` (default 1 / 20, max 100). |
+| GET    | `/plans/:id`      | **JWT** | Fetch a specific saved plan. 403 if you do not own it.                                          |
+| DELETE | `/plans/:id`      | **JWT** | Delete a saved plan.                                                                            |
+
+### `POST /plans/generate` — request body
+
+```json
+{
+  "origin_country": "india",
+  "destination_country": "germany",
+  "current_role": "Backend Engineer",
+  "target_role": "senior-backend-engineer",
+  "salary_expectation": 75000,
+  "salary_currency": "EUR",
+  "timeline_months": 9,
+  "work_authorisation_constraint": "needs_employer_sponsorship"
+}
 ```
 
-### Edge Case: Salary Shortfall
+`destination_country` and `target_role` must be slugs from
+`GET /destinations`. `work_authorisation_constraint` must be one of
+`needs_employer_sponsorship`, `no_constraint`, `already_has_right_to_work`.
 
-```bash
-# Change salary_expectation to 35000 in Scenario A → 422 SALARY_SHORTFALL
-# (below Skilled Worker min of €39,000)
-```
+### Domain error codes
 
-### Edge Case: Missing Data
+The relocation engine returns structured errors for known edge cases:
 
-```bash
-# Change destination_country to "canada" → 404 DATA_NOT_COVERED
-```
+| HTTP | `code`              | Meaning                                                                                         |
+| ---- | ------------------- | ----------------------------------------------------------------------------------------------- |
+| 404  | `DATA_NOT_COVERED`  | The requested `destination_country` + `target_role` combination has no data file.               |
+| 409  | `TIMELINE_CONFLICT` | `timeline_months` is shorter than the fastest realistic hiring + visa processing time.           |
+| 422  | `SALARY_SHORTFALL`  | `salary_expectation` is below the minimum salary threshold for every available visa route.      |
+| 401  | `UNAUTHORIZED`      | Missing or invalid JWT.                                                                         |
+| 400  | `VALIDATION_ERROR`  | Malformed request body.                                                                         |
+| 409  | `CONFLICT`          | Email already registered (on `/auth/register`).                                                 |
 
-## Adding New Destinations
+---
 
-Create a JSON file at `api/data/destinations/{destination}/{role-slug}.json` following the schema in `api/data/destinations/germany/senior-backend-engineer.json`, then register it in `api/data/destinations/index.json`.
+## Adding a New Destination or Role
 
-**No code changes required.**
+All relocation data is static JSON — no code changes needed to add new
+destination/role combinations.
+
+1. Create a data file at
+   `data/destinations/<destination-slug>/<role-slug>.json`, following the
+   schema used by
+   [`data/destinations/germany/senior-backend-engineer.json`](data/destinations/germany/senior-backend-engineer.json).
+2. Register it in [`data/destinations/index.json`](data/destinations/index.json)
+   under `supported_combinations`.
+3. Restart the dev server (the index is cached in-memory at load).
+
+The `DATA_NOT_COVERED` error is raised whenever a user requests a combination
+that is not present in `index.json` or whose JSON file is missing.
+
+---
 
 ## Project Structure
 
 ```
-career-relocation-advisor/
-├── api/                        ← NestJS backend
-│   ├── src/
-│   │   ├── auth/               ← JWT auth (register, login, guards)
-│   │   ├── users/              ← User service + Prisma queries
-│   │   ├── plans/              ← Plan CRUD + generate endpoint
-│   │   ├── relocation-engine/  ← Deterministic checks + orchestrator
-│   │   │   └── deterministic/  ← Timeline, salary, eligibility checkers
-│   │   ├── llm/                ← LLM facade (Gemini, Ollama providers)
-│   │   ├── data/               ← JSON data loader + destinations API
-│   │   ├── prisma/             ← Prisma client service
-│   │   └── common/             ← Exceptions, filters, interceptors
-│   ├── data/destinations/      ← JSON destination/role data files
-│   └── prisma/schema.prisma
-├── web/                        ← Next.js frontend
-│   └── src/app/
-│       ├── register/           ← Registration page
-│       ├── login/              ← Login page
-│       ├── generate/           ← Plan generation form
-│       └── plans/              ← Plans list + detail view
-└── DECISIONS.md                ← Architecture decisions
+ghix-task/
+├── src/
+│   ├── app/
+│   │   ├── api/v1/                  ← Route handlers (the "backend")
+│   │   │   ├── auth/
+│   │   │   │   ├── login/route.ts
+│   │   │   │   ├── logout/route.ts
+│   │   │   │   ├── me/route.ts
+│   │   │   │   └── register/route.ts
+│   │   │   ├── destinations/route.ts
+│   │   │   └── plans/
+│   │   │       ├── route.ts         ← GET (list) + POST (save)
+│   │   │       ├── generate/route.ts
+│   │   │       └── [id]/route.ts    ← GET + DELETE
+│   │   ├── register/                ← /register page
+│   │   ├── login/                   ← /login page
+│   │   ├── generate/                ← /generate page (plan form)
+│   │   ├── plans/                   ← /plans list + /plans/[id] detail
+│   │   ├── layout.tsx
+│   │   ├── page.tsx                 ← Landing page
+│   │   └── globals.css
+│   ├── components/
+│   │   ├── AuthProvider.tsx
+│   │   ├── Navbar.tsx
+│   │   └── PlanResult.tsx
+│   ├── lib/
+│   │   ├── api.ts                   ← Axios client used by the frontend
+│   │   ├── api-response.ts          ← `ok` / `err` / `ApiError` helpers
+│   │   ├── auth.ts                  ← `requireUser` / `extractUser`
+│   │   ├── jwt.ts                   ← sign / verify
+│   │   ├── prisma.ts                ← Prisma client singleton
+│   │   ├── data-service.ts          ← Loads destination/role JSON
+│   │   ├── relocation-engine.ts     ← Deterministic feasibility checks + orchestration
+│   │   ├── llm-service.ts           ← Gemini integration
+│   │   └── error.ts
+│   └── store/
+│       └── auth.store.ts            ← Zustand auth store
+├── data/destinations/               ← Static relocation data
+│   ├── index.json
+│   ├── germany/
+│   │   ├── senior-backend-engineer.json
+│   │   └── product-manager.json
+│   └── united-kingdom/
+│       ├── senior-backend-engineer.json
+│       └── product-manager.json
+├── prisma/
+│   ├── schema.prisma
+│   └── migrations/
+├── public/
+├── .env.example
+├── DECISIONS.md                     ← Architecture decisions
+├── next.config.ts
+├── package.json
+└── tsconfig.json
 ```
+
+---
+
+## How Plan Generation Works
+
+`POST /api/v1/plans/generate` runs the following pipeline
+(`src/lib/relocation-engine.ts`):
+
+1. **Load data** — look up `<destination>/<role>.json`. If missing →
+   `404 DATA_NOT_COVERED`.
+2. **Filter visa routes** by `work_authorisation_constraint`.
+3. **Salary check** — reject applicants whose expectation is below every
+   available route's minimum → `422 SALARY_SHORTFALL`.
+4. **Timeline check** — reject timelines shorter than fastest hiring + visa
+   processing → `409 TIMELINE_CONFLICT`.
+5. **Build deterministic output** — feasibility score, eligible routes,
+   timeline breakdown, salary assessment, market demand, data confidence.
+6. **Call the LLM** (Gemini) for the narrative summary and ranked action steps.
+   If the call fails or no API key is set, a deterministic fallback action
+   plan is used and `narrative_summary` is `null`.
+
+All structured numbers (salaries, processing times, thresholds) come from the
+JSON data — the LLM is never allowed to invent them.
+
+---
+
+## Troubleshooting
+
+- **`P1001: Can't reach database server`** — check `DATABASE_URL` and that
+  your Postgres instance is reachable. For Supabase, ensure you're using the
+  pooled connection string for `DATABASE_URL`.
+- **`prisma migrate deploy` complains about shadow database** — set
+  `DIRECT_URL` to a non-pooled Postgres URL.
+- **`narrative_summary` is `null` and `action_steps` look generic** — no
+  `LLM_API_KEY` is configured, or the Gemini call failed. Check the server
+  logs for `[LLM] …` entries. The response still contains the deterministic
+  plan.
+- **`VALIDATION_ERROR: password must be at least 8 characters`** on register —
+  your password must be at least 8 characters long.
+- **UI shows `Network Error`** — the `NEXT_PUBLIC_API_URL` default is
+  `/api/v1` (same origin). Only override it if you intentionally run the API
+  elsewhere.
+
+---
+
+## Further Reading
+
+- [`DECISIONS.md`](DECISIONS.md) — architecture decisions and trade-offs.

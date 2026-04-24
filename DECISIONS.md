@@ -1,68 +1,125 @@
 # Architecture & Design Decisions
 
+This document captures the non-trivial decisions behind the Career Relocation
+Advisor MVP — what was built, what was consciously skipped, and where the
+obvious future enhancements sit. It is deliberately written against what the
+code actually does today, not what I'd like it to do.
+
+Each of the six sections required by the task brief is covered below.
+
 ---
 
 ## 1. Scope
 
-### What I built
+### What's built
 
-- User registration, login, and session management (JWT, stateless)
-- Plan generation from a career profile input — deterministic eligibility + LLM narrative
-- Three hard-fail deterministic checks: data coverage, salary shortfall, timeline conflict
-- Structured `data_confidence` ratings on every API response field
-- Saved plans persisted per user (Supabase PostgreSQL via Prisma)
-- Reference data endpoint (`/api/v1/destinations`) — roles are bundled in the list response so the frontend needs only one request
-- Full Next.js frontend: register, login, generate, plans list, plan detail
+- **Auth** — Email + password registration, login, JWT-based session
+  (`jsonwebtoken` + `bcrypt`, 12 rounds). Stateless, short setup.
+- **Plan generation pipeline** — Deterministic eligibility + salary + timeline
+  checks, then an LLM call for narrative and ranked action steps.
+- **Three hard-fail deterministic edge cases** — `DATA_NOT_COVERED` (404),
+  `SALARY_SHORTFALL` (422), `TIMELINE_CONFLICT` (409). All return structured
+  JSON with typed `code` and a contextual `*_details` payload.
+- **Per-field `data_confidence` ratings** aggregated to an `overall` verdict
+  on every plan response.
+- **User persistence** — Plans are saved per user in PostgreSQL via Prisma,
+  listed with pagination, retrievable by id (403 on other users' plans),
+  deletable. Fulfils the "save and return to it later" requirement.
+- **Reference data endpoint** — `GET /api/v1/destinations` returns the full
+  destination + role index in one payload so the frontend needs only one
+  round trip.
+- **Frontend** — Next.js pages for register, login, generate, plans list,
+  and plan detail. Functional, not visually polished (the task brief
+  explicitly deprioritises this).
+- **Versioned API under `/api/v1/*`** with a consistent envelope shape
+  (`{success, data, meta}` / `{success, error: {code, message, ...extra}}`).
 
-### What I skipped and why
+### What's consciously skipped
 
 | Skipped | Reason |
-|---|---|
-| BullMQ / Redis queue | Adds ops complexity; LLM calls are fast enough at prototype scale. Documented how to add it. |
-| Redis response caching | Same — would cache on `hash(input)`, straightforward to retrofit. |
-| PDF export | UI polish, not core to the plan quality signal. |
-| Email verification / password reset | Out of scope for a take-home; JWT auth works end-to-end. |
-| Dockerized deployment | Added setup instructions instead; Docker would just wrap the same env vars. |
-| Per-destination lazy role loading | Built `/api/v1/destinations/[slug]/roles` but removed it as dead code — bundling roles in the destinations list response is one fewer round trip with no downside at this data size. |
+| --- | --- |
+| Async queue (BullMQ / Redis) for LLM calls | Ops overhead outweighs the benefit at prototype scale. See §5 for the plan. |
+| Response caching for repeated identical inputs | Same reasoning. Caching on `hash(input)` is straightforward to retrofit. |
+| Explicit `AbortController` timeout on the Gemini call | Relying on the runtime's function timeout is sufficient for an MVP. See Future Enhancements. |
+| `httpOnly` auth cookie + refresh token rotation | The MVP stores the JWT in a client-readable cookie. Fast, good enough for a take-home; production would flip this. See §4. |
+| Rate limiting on auth / plan endpoints | Not required by the brief; would add a middleware + Redis for a real deployment. |
+| Password complexity rules, email verification, password reset | Out of scope for a 7-day MVP. Login/register works end-to-end. |
+| Role / destination admin UI | Data is edited directly in JSON files. New destinations are data-only, which the brief explicitly requires. |
+| PDF / email export of saved plans | UI polish, not a signal the brief cares about. |
+| Dockerfile / deployed URL | Optional per the brief. Setup instructions in the README are enough to run locally in under two minutes. |
 
-**The core trade-off:** I chose depth on the eligibility engine (three distinct failure modes with typed error codes, structured salary/timeline breakdowns, confidence ratings) over breadth (more destinations, more roles, more UI screens). A plan that gives honest, sourced answers for two destinations is more useful than optimistic answers for ten.
+### The core trade-off
+
+I chose **depth on the correctness engine** (three distinct typed failure
+modes, structured salary/timeline breakdowns, per-field confidence) over
+**breadth** (more destinations, more roles, more UI polish). For a product
+whose value is "honest feasibility", shipping optimistic answers for ten
+countries would be a worse outcome than sharp, sourced answers for two.
 
 ---
 
 ## 2. AI vs. Deterministic Logic
 
-**All eligibility, salary, and timeline decisions are deterministic. The LLM never touches these.**
+**All eligibility, salary, and timeline decisions are deterministic. The LLM
+never makes a correctness call.**
 
-The pipeline is strictly ordered:
+The pipeline in `src/lib/relocation-engine.ts::generatePlan` is strictly
+ordered:
 
 ```
-1. Data lookup          → 404 DATA_NOT_COVERED if destination+role not in data layer
-2. Work auth filter     → prune routes by user's sponsorship constraint
-3. Salary check         → 422 SALARY_SHORTFALL if salary falls below every eligible route
-4. Timeline check       → 409 TIMELINE_CONFLICT if user timeline < fastest route + hiring minimum
-5. Build structured plan (feasibility, salary assessment, timeline breakdown)
-6. LLM call             → narrative summary + action steps (prose only)
+1. Data lookup      → 404 DATA_NOT_COVERED    if (destination, role) not in data layer
+2. Work auth filter → narrow routes by sponsorship constraint
+3. Salary check     → 422 SALARY_SHORTFALL    if no route's minimum is met
+4. Timeline check   → 409 TIMELINE_CONFLICT   if timeline < fastest route + hiring min
+5. Build structured output
+   (feasibility, salary assessment, eligible routes, timeline breakdown,
+    market demand, data confidence)
+6. LLM call         → narrative summary + action steps (prose only)
+7. If the LLM fails or returns nothing, fall back to a deterministic action
+   plan built from the data layer. Plan is never empty, response is never 500.
 ```
 
-### Why this line
+### Why this boundary
 
-LLMs hallucinate. Telling a user they qualify for a Skilled Worker Visa when they don't is actively harmful — it could cost them visa application fees, legal advice time, or a job offer. The deterministic layer uses JSON data sourced from government publications and job boards; it is correct by construction.
+LLMs hallucinate. Telling a user they qualify for a Skilled Worker Visa when
+they don't is actively harmful — it can cost them application fees, legal
+advice, and a job offer. Correctness-critical outputs must come from a layer
+that is correct by construction.
 
-The LLM's job is to take the already-correct structured output and write a readable summary. It never makes a binary decision.
+The deterministic layer takes JSON data and runs plain arithmetic comparisons
+and filters. The LLM's job is purely stylistic: take the already-correct
+structured output and write readable prose around it.
 
-### Options I considered
+### Options considered
 
 **Option A (chosen):** Deterministic first, LLM for prose only.
-- Gives up: richer, context-aware eligibility reasoning the LLM could theoretically provide.
-- Gains: zero hallucination risk on eligibility, instant failure feedback with typed error codes, full plan still usable if LLM is down.
 
-**Option B:** LLM makes all decisions, prompted with data.
-- Gives up: correctness guarantees. Even with a strong system prompt, a model can confidently return wrong salary thresholds or invent visa routes.
-- Gains: potentially richer narrative. Not worth the risk for anything touching legal/financial decisions.
+- Gives up: richer, context-aware eligibility reasoning an LLM could
+  theoretically provide.
+- Gains: zero hallucination risk on anything touching legal/financial
+  decisions, instant typed failures, plan still usable if the LLM is down.
 
-### LLM failure mode
+**Option B (rejected):** LLM makes decisions, prompted with the data.
 
-If the LLM times out or returns malformed JSON, `narrative_summary` is `null` and `llm_status` is `"timeout"` or `"error"`. The plan is still complete and fully usable. No 500. The frontend degrades gracefully by hiding the summary section.
+- Gives up: correctness guarantees. Even with a strong system prompt and
+  structured output mode, a model will occasionally return wrong salary
+  thresholds or invent visa routes.
+- Gains: potentially richer narrative. Not worth the correctness risk.
+
+### LLM failure modes observed in code
+
+`src/lib/llm-service.ts` returns `llm_status` of `"success"`, `"error"`, or
+`"skipped"`:
+
+- `"success"` — Gemini returned valid JSON matching the response schema.
+- `"error"` — Gemini call threw, or JSON.parse failed after schema-mode
+  output. `llm_error` carries the message.
+- `"skipped"` — No `LLM_API_KEY` configured. The system still runs; the
+  deterministic fallback action steps are used and `narrative_summary` is
+  `null`.
+
+The frontend degrades gracefully by hiding the narrative section when it is
+`null`.
 
 ---
 
@@ -70,11 +127,15 @@ If the LLM times out or returns malformed JSON, `narrative_summary` is `null` an
 
 ### The problem
 
-Salary data for "Senior Backend Engineer in Germany" from a job board survey is not the same quality as a visa salary threshold sourced directly from the German Federal Employment Agency. Both are useful, but a user should know which to rely on.
+"Salary for Senior Backend Engineer in Germany from a job-board survey" is
+not the same quality as "visa salary threshold pulled from the Federal
+Employment Agency". Both are useful, but the user must know which to rely on
+before putting money on the table.
 
 ### How it flows
 
-Data confidence is set at the field level inside each destination/role JSON file:
+Confidence is declared at the **field level** inside each destination/role
+JSON file:
 
 ```json
 "salary": {
@@ -84,26 +145,35 @@ Data confidence is set at the field level inside each destination/role JSON file
 "work_authorisation_routes": [
   {
     "name": "EU Blue Card",
-    "salary_minimum_eur": 45300,
-    "data_confidence": "verified"
+    "salary_minimum_eur": 58400,
+    "data_confidence": "estimated"
   }
 ]
 ```
 
-At plan generation time, the engine reads each field's confidence and aggregates to an `overall` using the most conservative level present:
+At plan generation time, `aggregateConfidence` in
+`src/lib/relocation-engine.ts` reads each section's flag and computes an
+`overall` verdict using the **most conservative level present**:
 
 ```
-verified → estimated → placeholder   (trust descending)
+verified  ⇐  estimated  ⇐  placeholder     (trust descending)
 ```
 
-The API response carries both `overall` and per-field breakdowns:
+If any field is `placeholder`, `overall` is `placeholder`. If any field is
+`estimated` and none is `placeholder`, `overall` is `estimated`. Only if
+every field is `verified` is the overall response `verified`.
+
+### What the API returns
+
+Every plan response carries both the overall verdict and the per-field
+breakdown, so the frontend can render badges section by section:
 
 ```json
 "data_confidence": {
   "overall": "estimated",
   "fields": {
     "salary": "estimated",
-    "work_authorisation": "verified",
+    "work_authorisation": "estimated",
     "timeline": "estimated",
     "market_demand": "estimated",
     "credentials": "estimated"
@@ -111,19 +181,29 @@ The API response carries both `overall` and per-field breakdowns:
 }
 ```
 
-The frontend renders a confidence badge per section so users know exactly which parts of the plan to stress-test before acting on them.
-
 ### Confidence levels
 
 | Level | Meaning |
-|---|---|
-| `verified` | Sourced from official government publications (e.g., UK Home Office, German BAMF) |
-| `estimated` | Derived from job boards, salary surveys — directionally correct, not authoritative |
-| `placeholder` | Synthetic data — must be replaced with real sourcing before production use |
+| --- | --- |
+| `verified` | Sourced from official government publications (UK Home Office, BAMF, Bundesagentur für Arbeit, etc.). |
+| `estimated` | Derived from job boards, salary surveys, market commentary — directionally correct, not authoritative. |
+| `placeholder` | Synthetic value — must be replaced before production use. |
 
 ### What I gave up
 
-Setting confidence at the field level requires discipline when adding new destination data. A simpler approach (one confidence level per destination file) would be easier to maintain but loses the nuance — a file can have verified visa thresholds and estimated salary data at the same time.
+Per-field confidence requires discipline when adding new data. A simpler
+one-flag-per-file approach would be easier to maintain but loses the nuance
+— a file can legitimately have verified visa thresholds and estimated salary
+data at the same time. Per the brief's emphasis on data quality signalling,
+that nuance is worth the maintenance cost.
+
+### Known shortcut
+
+`aggregateConfidence` currently reads only the first element of
+`work_authorisation_routes` when computing the `work_authorisation` field
+flag. If a future data file mixes `verified` and `estimated` routes, this
+would under-report risk. Replacing it with the same "most conservative wins"
+reducer used for `overall` is a future enhancement noted below.
 
 ---
 
@@ -131,75 +211,187 @@ Setting confidence at the field level requires discipline when adding new destin
 
 ### Options considered
 
-| Model | Reason considered | Reason rejected |
-|---|---|---|
-| GPT-4o | Best narrative quality | Requires paid OpenAI account — reviewers couldn't run it |
-| Groq (Llama 3 70B) | Fast, free tier | Free tier rate limits are tight; context window smaller |
-| Gemini Flash (chosen) | Generous free tier, 1M token context, fast | Occasionally verbose JSON output needs post-processing |
-| Ollama (local fallback) | Zero cost, fully private | Requires local install; not portable for reviewers |
+| Model | Reason considered | Reason rejected (for now) |
+| --- | --- | --- |
+| GPT-4 / GPT-4o | Best narrative quality | Requires paid OpenAI account — reviewers couldn't run it without keys |
+| Groq (Llama 3 70B) | Fast, generous free tier | Tighter rate limits under concurrent load; smaller context |
+| **Gemini Flash (chosen)** | Large free tier, big context, native JSON schema output | Occasionally verbose output; no Ollama-style portability |
+| Ollama local (Llama 3, Mistral) | Zero cost, fully private, no rate limits | Requires local install — not portable for a reviewer with only an API key |
 
-### What I chose and why
+### What's implemented
 
-**Primary: Gemini** (`gemini-3.1-flash-lite-preview` via Google AI Studio free tier)
+Gemini only. Configured via:
 
-- Context window is large enough to pass the full plan JSON as input without chunking
-- Reliable JSON output mode — the prompt asks for structured JSON, Gemini follows it consistently
-- Free tier is generous enough for repeated reviewer runs without hitting rate limits
-- Configured via `LLM_PROVIDER=gemini` + `LLM_API_KEY`
+- `LLM_API_KEY` — Google AI Studio key (empty → LLM step is skipped, plan
+  still generates with deterministic fallback action steps).
+- `LLM_MODEL` — optional, defaults to `gemini-3.1-flash-lite-preview`.
 
-**Fallback: Ollama (local Llama 3)**
+`src/lib/llm-service.ts` uses the SDK's response-schema JSON mode so the
+output is structurally predictable. It still defensively strips code fences
+in case a future model or prompt regression returns fenced output.
 
-- Configured via `LLM_PROVIDER=ollama` — requires `ollama pull llama3` locally
-- Zero API cost, fully private, no rate limits
-- Narrative quality is lower than Gemini but the structured data is unaffected
+### Limitations worked around
 
-### Limitations I worked around
+- **Verbose / fenced JSON** — stripped with a small post-processor before
+  `JSON.parse`. Harmless if the model already honours the schema.
+- **Occasional empty `action_steps`** — when the model returns an empty
+  array, the engine falls back to `buildActionSteps`, a deterministic step
+  generator that cites the real data-layer facts. The plan is never empty.
+- **No explicit timeout** — the call awaits `model.generateContent` without
+  an `AbortController`. The runtime's function timeout is the backstop.
+  Adding a client-side 10–15s abort is flagged in Future Enhancements.
 
-- Gemini sometimes wraps JSON output in markdown code fences — the service strips these before parsing
-- The model name is intentionally not surfaced in the UI; it is implementation detail
-- If the LLM returns invalid JSON after stripping, the engine falls back to deterministic action steps built from the data layer — the plan is never empty
+### Future enhancements (LLM layer)
+
+These are deliberately deferred for the MVP but they're the obvious next
+moves:
+
+- **Ollama provider** — a local, offline fallback for private / air-gapped
+  deployments. Introduces an `LLM_PROVIDER` env var (`gemini` | `ollama`) and
+  a provider interface so `llm-service.ts` can dispatch based on it. Value:
+  zero-cost local dev, no rate limits, no data egress. Estimated size: under
+  a day.
+- **AbortController + 10–15s timeout** around `model.generateContent`, with
+  a new `llm_status: "timeout"` code returned to the client. Value: bounds
+  the worst-case request latency; gives the frontend a clearer signal.
+- **Response caching keyed on `hash(input + destination_role_file_hash)`**
+  so the same input doesn't pay the LLM cost twice. Pairs well with queueing
+  (see §5).
+- **Model A/B routing** — keep a cheap fast model as default, escalate to a
+  larger model if the narrative is short or fails quality checks.
 
 ---
 
 ## 5. Scale Assumption
 
-**The single assumption that breaks first under real load: unbounded concurrent LLM calls.**
+**The assumption that breaks first under real load: unbounded concurrent
+synchronous LLM calls inside the request path.**
 
-Every `/api/v1/plans/generate` request makes a live LLM API call synchronously. Under concurrent load:
+Every `POST /api/v1/plans/generate` runs the Gemini call in-line inside the
+route handler. Under concurrency:
 
-- 50 simultaneous users → 50 simultaneous Gemini API calls
-- Gemini free tier rate-limits at ~15 RPM → queue backs up, timeouts cascade
-- Each request holds an open Next.js serverless function for up to 15 seconds
+| Load | Observed / expected behaviour |
+| --- | --- |
+| 1–5 concurrent users | Works fine, 3–8s end-to-end response. |
+| 10–20 concurrent users | Gemini free-tier rate limit (~15 RPM) hits, LLM calls start erroring. The plan still returns — `llm_status: "error"`, `narrative_summary: null`, deterministic action steps. |
+| 50+ concurrent users | Function / runtime timeout backpressure, Prisma connection pool pressure, user-visible latency degrades. |
 
-### What breaks and when
-
-| Load level | Behaviour |
-|---|---|
-| 1–5 concurrent users | Works fine, ~3–8s response |
-| 10–20 concurrent users | Gemini rate limit hit, LLM calls start timing out, plans degrade to no narrative |
-| 50+ concurrent users | Function timeout backpressure, DB connection pool exhaustion likely |
-
-### The fix (not implemented)
+### Planned fix (not implemented)
 
 ```
-Request → BullMQ queue (Redis) → Worker pool (concurrency: 5) → Gemini API
+Client → POST /plans/generate
+         ├─ Run deterministic checks immediately (fast, can return an
+         │  early 4xx without waiting for the LLM)
+         └─ Enqueue LLM job (BullMQ on Redis) → respond 202 with a job id
+            Worker pool (concurrency 5) pulls from the queue, calls Gemini,
+            writes the narrative into the plan row in Postgres.
+Client → GET /plans/:id (poll)  OR  subscribe to SSE/WebSocket for completion
 ```
 
-The deterministic checks run instantly outside the queue. Only the LLM call is queued. Users get a job ID back immediately and poll for completion. The JWT-based auth is already stateless, so horizontal scaling of the web layer is architecturally possible without further changes.
+Key properties of this design that the current code already supports:
+
+- **Stateless JWT auth** — the web layer can be horizontally scaled today.
+- **Deterministic output is the critical path** — even without a queue, the
+  correctness-critical part of the plan is available long before the LLM
+  narrative. The queue just moves the LLM off the request path; it does not
+  change any semantics.
+- **LLM output already optional** — because the engine already returns a
+  usable plan when the LLM fails, moving the LLM to async is a mechanical
+  refactor, not a redesign.
+
+### Future enhancements (scale)
+
+- **BullMQ + Redis worker** for the LLM call, returning 202 + job id.
+- **Response cache** on `hash(input)` so repeated identical inputs serve
+  instantly.
+- **Per-IP and per-user rate limits** on `/auth/*` and `/plans/generate` to
+  blunt abuse.
+- **Structured logging + tracing** (request id through every log line) so
+  queue-stage debugging is tractable.
+- **Connection pooling strategy** explicitly sized for Supabase's limits if
+  deployed there — PgBouncer on the direct URL, pooled URL for runtime.
 
 ---
 
 ## 6. Hindsight
 
-**The one decision I would make differently: seed destination data into the database, not JSON files.**
+**The one decision I'd make differently: seed destination data into the
+database, not JSON files.**
 
-Currently, the data layer is a folder of JSON files read from disk at runtime (`data/destinations/{slug}/{role}.json`). This was the right call to move fast — no schema design, no seed scripts, easy to edit. But it has a compounding maintenance cost:
+Today, `src/lib/data-service.ts` reads JSON files from disk at runtime
+(`data/destinations/{slug}/{role}.json`) and caches `index.json` in-memory.
+This was the right call for a 7-day MVP — no schema design, no seed scripts,
+no admin UI, and the brief explicitly required "new destinations without
+code changes", which JSON files satisfy trivially.
 
-- Adding a new destination requires a file system change and a deploy
-- There is no way to query "which destinations support role X" without reading every file
-- The frontend destination list is a manually maintained `index.json` that can drift from the actual files
-- An admin interface to update salary data or add routes is impossible without direct file system access
+But the maintenance cost compounds:
 
-The correct architecture is to seed this data into PostgreSQL on first boot (or via a seed script) with a proper schema: `destinations`, `roles`, `work_auth_routes`, `salary_data` tables. Prisma already manages the DB — adding these tables is a small migration. This would make the destination list queryable, the data editable via an admin UI, and the confidence ratings filterable (e.g., "show only verified data").
+- **No query layer.** "Which destinations support role X?" has no
+  database-level answer — you'd iterate files.
+- **`index.json` can drift** from the actual file set. Adding a role file
+  without registering it silently returns `DATA_NOT_COVERED`.
+- **No admin interface** — editing salary data or adding a new visa route
+  requires a deploy because the file is baked into the build.
+- **No audit trail** on data changes — who changed the Skilled Worker
+  threshold, when, and why? A DB row with timestamps and author is easier
+  to defend to a user who acts on the plan.
 
-I didn't do this because the JSON approach unblocked everything else immediately. But it is the decision that creates the most friction as the product scales.
+The better architecture is to seed this data into Postgres on first boot
+with a proper schema — `destinations`, `roles`, `work_auth_routes`,
+`salary_data`, `credentials`, `market_demand` — and keep the JSON files only
+as the **seed source of truth** in Git. Prisma already manages the DB, so
+this is a small migration and a seed script, not a rewrite. It would make
+the destination list queryable, the data editable via an admin UI, the
+confidence ratings filterable (e.g., "only show verified data"), and would
+open the door to per-destination versioning.
+
+I didn't do it because the JSON approach unblocked the rest of the system
+immediately. It is, however, the decision that would create the most
+friction as the product scales past ~20 destinations.
+
+---
+
+## Appendix: Consolidated future enhancements
+
+Grouped for easy reviewing. Each of these is a conscious next step, not an
+oversight.
+
+**Correctness & robustness**
+
+- `AbortController` timeout on the LLM call; add `llm_status: "timeout"`.
+- Fix `aggregateConfidence` to use the "most conservative wins" rule across
+  all work-auth routes, not just the first.
+- Password complexity requirements + account lockout after repeated failures.
+
+**Security hardening**
+
+- Move JWT to an `httpOnly`, `SameSite=Lax`, `Secure` cookie. Introduce a
+  refresh token rotation flow. Current MVP stores the token in a
+  client-readable cookie — trades a small XSS-exfiltration risk for setup
+  speed.
+- Per-IP and per-user rate limits on `/auth/*` and `/plans/generate`.
+- CSRF protection once the cookie becomes `httpOnly`.
+
+**LLM & narrative quality**
+
+- **Ollama provider** — offline fallback for private deployments, zero cost,
+  no rate limits. Sketched in §4.
+- Response caching keyed on `hash(input)` to avoid paying for identical LLM
+  calls twice.
+- Model A/B routing (cheap-fast by default, larger model on quality
+  regression).
+
+**Scale**
+
+- BullMQ + Redis worker pool for the LLM call. Respond `202` with a job id,
+  let the client poll `GET /plans/:id` or subscribe via SSE. Sketched in §5.
+- Structured logging with a request id propagated through every log.
+- Explicit Prisma connection pool sizing for the target Postgres host.
+
+**Data layer**
+
+- Seed destination data into Postgres (see §6). Keep JSON in Git as the
+  seed source of truth.
+- Admin UI for editing data + viewing which plans reference each route.
+- Per-field data sources (URL + as-of date) on each value, not just a
+  confidence flag.
