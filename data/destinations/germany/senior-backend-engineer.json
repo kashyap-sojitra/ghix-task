@@ -1,0 +1,79 @@
+{
+  "destination": "Germany",
+  "role_slug": "senior-backend-engineer",
+  "role_display_name": "Senior Backend Engineer",
+  "last_updated": "2025-01-01",
+  "salary": {
+    "currency_code": "EUR",
+    "min": 65000,
+    "median": 85000,
+    "max": 130000,
+    "sponsorship_minimum_threshold": 58400,
+    "data_confidence": "estimated"
+  },
+  "work_authorisation_routes": [
+    {
+      "name": "EU Blue Card",
+      "type": "employer_sponsored",
+      "sponsorship_required": true,
+      "processing_time_months": {
+        "min": 1,
+        "max": 3
+      },
+      "salary_minimum_eur": 58400,
+      "eligibility_criteria": [
+        "Recognised university degree of at least 3 years duration",
+        "Job offer with salary at or above the Blue Card threshold",
+        "Occupation must correspond to the field of qualification"
+      ],
+      "data_confidence": "estimated"
+    },
+    {
+      "name": "Skilled Worker Visa (Fachkräftevisum)",
+      "type": "employer_sponsored",
+      "sponsorship_required": true,
+      "processing_time_months": {
+        "min": 2,
+        "max": 4
+      },
+      "salary_minimum_eur": 45552,
+      "eligibility_criteria": [
+        "Recognised qualification or university degree in a relevant field",
+        "Concrete job offer from a German employer",
+        "Salary meets or exceeds the sector minimum wage"
+      ],
+      "data_confidence": "estimated"
+    }
+  ],
+  "credentials": {
+    "required_qualifications": [
+      "Bachelor's degree in Computer Science, Software Engineering, or related field",
+      "5+ years of professional backend development experience"
+    ],
+    "language_requirements": [
+      "German B1 recommended for daily workplace communication",
+      "English C1 accepted at international tech companies"
+    ],
+    "degree_equivalency_notes": "Degrees must be recognised via the anabin database or through a Statement of Comparability from KMK. IT degrees from most countries are generally accepted.",
+    "data_confidence": "estimated"
+  },
+  "timeline": {
+    "typical_hiring_duration_months": {
+      "min": 2,
+      "max": 4
+    },
+    "fastest_auth_processing_months": 1,
+    "slowest_auth_processing_months": 4,
+    "total_estimated_time_to_start_months": {
+      "min": 3,
+      "max": 8
+    },
+    "data_confidence": "estimated"
+  },
+  "market_demand": {
+    "level": "high",
+    "demand_scale_definition": "high = >500 active postings/month; medium = 100–500; low = <100",
+    "notes": "Germany faces a significant shortage of software engineers. Berlin, Munich, and Hamburg are the primary tech hubs with consistently strong demand for senior backend engineers.",
+    "data_confidence": "estimated"
+  }
+}

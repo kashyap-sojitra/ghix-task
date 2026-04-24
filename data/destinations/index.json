@@ -5,8 +5,14 @@
       "destination_display_name": "Germany",
       "currency_code": "EUR",
       "roles": [
-        { "slug": "senior-backend-engineer", "display_name": "Senior Backend Engineer" },
-        { "slug": "product-manager", "display_name": "Product Manager" }
+        {
+          "slug": "senior-backend-engineer",
+          "display_name": "Senior Backend Engineer"
+        },
+        {
+          "slug": "product-manager",
+          "display_name": "Product Manager"
+        }
       ]
     },
     {
@@ -14,9 +20,15 @@
       "destination_display_name": "United Kingdom",
       "currency_code": "GBP",
       "roles": [
-        { "slug": "senior-backend-engineer", "display_name": "Senior Backend Engineer" },
-        { "slug": "product-manager", "display_name": "Product Manager" }
+        {
+          "slug": "senior-backend-engineer",
+          "display_name": "Senior Backend Engineer"
+        },
+        {
+          "slug": "product-manager",
+          "display_name": "Product Manager"
+        }
       ]
     }
   ]
-} 
+}

@@ -57,7 +57,6 @@ export interface DestinationIndex {
 }
 
 const dataPath = path.join(process.cwd(), 'data', 'destinations');
-const cache = new Map<string, DestinationRoleData>();
 let index: DestinationIndex | null = null;
 
 function loadIndex(): DestinationIndex {
@@ -70,19 +69,19 @@ export function getIndex(): DestinationIndex {
   return loadIndex();
 }
 
-export function findDestinationData(destination: string, roleSlug: string): DestinationRoleData | null {
-  const key = `${destination}__${roleSlug}`;
-  if (cache.has(key)) return cache.get(key)!;
-
-  const filePath = path.join(dataPath, destination, `${roleSlug}.json`);
-  if (!fs.existsSync(filePath)) return null;
-
-  const data = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as DestinationRoleData;
-  cache.set(key, data);
-  return data;
-}
-
 export function getSupportedRolesForDestination(destination: string): Array<{ slug: string; display_name: string }> | null {
   const entry = loadIndex().supported_combinations.find((c) => c.destination_slug === destination);
   return entry ? entry.roles : null;
+}
+
+export function getDestinationRoleData(destinationSlug: string, roleSlug: string): DestinationRoleData | null {
+  const idx = loadIndex();
+  const combo = idx.supported_combinations.find((c) => c.destination_slug === destinationSlug);
+  if (!combo) return null;
+  const role = combo.roles.find((r) => r.slug === roleSlug);
+  if (!role) return null;
+
+  const filePath = path.join(dataPath, destinationSlug, `${roleSlug}.json`);
+  if (!fs.existsSync(filePath)) return null;
+  return JSON.parse(fs.readFileSync(filePath, 'utf-8')) as DestinationRoleData;
 }

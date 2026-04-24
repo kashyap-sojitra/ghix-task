@@ -1,0 +1,79 @@
+{
+  "destination": "Germany",
+  "role_slug": "product-manager",
+  "role_display_name": "Product Manager",
+  "last_updated": "2025-01-01",
+  "salary": {
+    "currency_code": "EUR",
+    "min": 60000,
+    "median": 78000,
+    "max": 115000,
+    "sponsorship_minimum_threshold": 58400,
+    "data_confidence": "estimated"
+  },
+  "work_authorisation_routes": [
+    {
+      "name": "EU Blue Card",
+      "type": "employer_sponsored",
+      "sponsorship_required": true,
+      "processing_time_months": {
+        "min": 1,
+        "max": 3
+      },
+      "salary_minimum_eur": 58400,
+      "eligibility_criteria": [
+        "University degree of at least 3 years in a relevant field",
+        "Job offer with salary at or above the Blue Card threshold",
+        "Occupation must correspond to the field of qualification"
+      ],
+      "data_confidence": "estimated"
+    },
+    {
+      "name": "Skilled Worker Visa (Fachkräftevisum)",
+      "type": "employer_sponsored",
+      "sponsorship_required": true,
+      "processing_time_months": {
+        "min": 2,
+        "max": 5
+      },
+      "salary_minimum_eur": 45552,
+      "eligibility_criteria": [
+        "Recognised degree in business, technology, or a related field",
+        "Concrete job offer from a German employer",
+        "Salary meets or exceeds the sector minimum"
+      ],
+      "data_confidence": "estimated"
+    }
+  ],
+  "credentials": {
+    "required_qualifications": [
+      "Bachelor's degree in Business, Engineering, Computer Science, or a related discipline",
+      "3+ years of product management experience with demonstrable outcomes"
+    ],
+    "language_requirements": [
+      "German B2 frequently required for PM roles involving German-speaking stakeholders",
+      "English C1 sufficient for international product teams"
+    ],
+    "degree_equivalency_notes": "Check the anabin database for degree recognition. Business and management degrees from most accredited universities are recognised. A Statement of Comparability from KMK may be requested.",
+    "data_confidence": "estimated"
+  },
+  "timeline": {
+    "typical_hiring_duration_months": {
+      "min": 2,
+      "max": 5
+    },
+    "fastest_auth_processing_months": 1,
+    "slowest_auth_processing_months": 5,
+    "total_estimated_time_to_start_months": {
+      "min": 3,
+      "max": 10
+    },
+    "data_confidence": "estimated"
+  },
+  "market_demand": {
+    "level": "medium",
+    "demand_scale_definition": "high = >500 active postings/month; medium = 100–500; low = <100",
+    "notes": "Product Manager demand in Germany is moderate. Berlin leads with tech-focused PM roles. German language skills significantly widen the opportunity pool beyond international companies.",
+    "data_confidence": "estimated"
+  }
+}

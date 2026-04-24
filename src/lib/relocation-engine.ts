@@ -1,4 +1,4 @@
-import { DestinationRoleData, WorkAuthRoute, getIndex } from './data-service';
+import { DestinationRoleData, WorkAuthRoute, getDestinationRoleData } from './data-service';
 import { generatePlanFromAI, LlmActionStep } from './llm-service';
 import { ApiError } from './api-response';
 
@@ -58,6 +58,7 @@ export interface PlanOutput {
     generated_at: string;
     llm_used: string | null;
     llm_status: string;
+    llm_error: string | null;
     deterministic_check_version: string;
   };
 }
@@ -167,36 +168,17 @@ function checkTimeline(userMonths: number, data: DestinationRoleData, eligibleRo
 }
 
 export async function generatePlan(input: GeneratePlanInput): Promise<PlanOutput> {
-  const idx = getIndex();
-  const combo = idx.supported_combinations.find((c) => c.destination_slug === input.destination_country);
-  const currencyCode = combo?.currency_code ?? 'EUR';
-  const roleDisplayName = combo?.roles.find((r) => r.slug === input.target_role)?.display_name ?? input.target_role;
-
-  // Single LLM call: fetches market data + narrative + action steps together
-  const llmResult = await generatePlanFromAI({
-    origin_country: input.origin_country,
-    destination_country: input.destination_country,
-    current_role: input.current_role,
-    target_role: input.target_role,
-    role_display_name: roleDisplayName,
-    salary_expectation: input.salary_expectation,
-    salary_currency: input.salary_currency,
-    timeline_months: input.timeline_months,
-    currency_code: currencyCode,
-    work_authorisation_constraint: input.work_authorisation_constraint,
-  });
-
-  if (!llmResult) {
+  // Load static JSON data — throws DATA_NOT_COVERED if destination+role not in data layer
+  const data = getDestinationRoleData(input.destination_country, input.target_role);
+  if (!data) {
     throw new ApiError(
-      'AI_FETCH_FAILED',
-      `The AI could not generate a plan for "${input.destination_country}" / "${input.target_role}". Ensure LLM_API_KEY is configured and try again.`,
-      503,
+      'DATA_NOT_COVERED',
+      `No data available for destination "${input.destination_country}" with role "${input.target_role}". This combination is not currently supported.`,
+      404,
     );
   }
 
-  const data = llmResult.destination_data;
-
-  // Deterministic checks on AI-returned data
+  // Deterministic checks on static JSON data
   const constraintFiltered = filterByConstraint(data.work_authorisation_routes, input.work_authorisation_constraint);
   const { eligibleRoutes, salaryAssessment } = checkSalary(input.salary_expectation, data, constraintFiltered);
   checkTimeline(input.timeline_months, data, eligibleRoutes);
@@ -206,8 +188,22 @@ export async function generatePlan(input: GeneratePlanInput): Promise<PlanOutput
   const timelineBreakdown = buildTimeline(input, data, eligibleRoutes);
   const dataConfidence = aggregateConfidence(data);
 
+  // LLM used only for narrative + action steps — all structured data comes from static JSON
+  const llmResult = await generatePlanFromAI({
+    origin_country: input.origin_country,
+    destination_country: input.destination_country,
+    current_role: input.current_role,
+    target_role: input.target_role,
+    role_display_name: data.role_display_name,
+    salary_expectation: input.salary_expectation,
+    salary_currency: input.salary_currency,
+    timeline_months: input.timeline_months,
+    destination_data: data,
+    work_authorisation_constraint: input.work_authorisation_constraint,
+  });
+
   const finalSteps: LlmActionStep[] =
-    llmResult.action_steps && llmResult.action_steps.length > 0
+    llmResult?.action_steps && llmResult.action_steps.length > 0
       ? llmResult.action_steps
       : buildActionSteps(input, data, eligibleRoutes);
 
@@ -215,15 +211,16 @@ export async function generatePlan(input: GeneratePlanInput): Promise<PlanOutput
     feasibility,
     eligible_routes: eligibleRoutesFormatted,
     ranked_action_plan: finalSteps,
-    narrative_summary: llmResult.narrative_summary ?? null,
+    narrative_summary: llmResult?.narrative_summary ?? null,
     timeline_breakdown: timelineBreakdown,
     salary_assessment: salaryAssessment,
     market_demand: { level: data.market_demand.level, notes: data.market_demand.notes },
     data_confidence: dataConfidence,
     meta: {
       generated_at: new Date().toISOString(),
-      llm_used: llmResult.llm_used,
-      llm_status: llmResult.llm_status,
+      llm_used: llmResult?.llm_used ?? null,
+      llm_status: llmResult?.llm_status ?? 'skipped',
+      llm_error: llmResult?.llm_error ?? null,
       deterministic_check_version: '1.0.0',
     },
   };
@@ -303,34 +300,29 @@ function aggregateConfidence(data: DestinationRoleData): PlanOutput['data_confid
 
 function buildActionSteps(
   input: GeneratePlanInput,
-  _data: DestinationRoleData,
+  data: DestinationRoleData,
   eligibleRoutes: WorkAuthRoute[],
 ): ActionStep[] {
   const steps: ActionStep[] = [];
-  const dest = input.destination_country;
-  const isGermany = dest === 'germany';
-  const isUK = dest === 'united-kingdom';
+  const dest = data.destination;
   const needsSponsorship = input.work_authorisation_constraint === 'needs_employer_sponsorship';
+  const langReqs = data.credentials.language_requirements;
 
   steps.push({
     rank: 1,
     phase: 'Preparation',
     title: 'Credential Verification',
-    description: isGermany
-      ? 'Get your academic credentials evaluated via the anabin database (anabin.kmk.org). Indian IT degrees are generally recognized but verification is required for the visa process.'
-      : isUK
-        ? 'Get your credentials evaluated by UK ENIC (formerly NARIC). IIT and NIT degrees are typically recognized at UK Bachelor level or above.'
-        : 'Get your academic credentials formally evaluated for the destination country.',
+    description: `Get your academic credentials formally evaluated for ${dest}. ${data.credentials.degree_equivalency_notes}`,
     estimated_duration_weeks: 4,
     priority: 'critical',
   });
 
-  if (isGermany) {
+  if (langReqs.length > 0) {
     steps.push({
-      rank: 2,
+      rank: steps.length + 1,
       phase: 'Preparation',
       title: 'Language Preparation',
-      description: 'Assess your German language level. While B1 is preferred, many international tech companies in Germany hire in English. Target B1 for maximum route eligibility.',
+      description: `Review language requirements for ${dest}: ${langReqs.join('; ')}. Obtain relevant certifications early as they may be required for visa or employer applications.`,
       estimated_duration_weeks: 12,
       priority: 'medium',
     });
@@ -341,12 +333,8 @@ function buildActionSteps(
     phase: 'Job Search',
     title: needsSponsorship ? 'Target Sponsorship-Ready Employers' : 'Begin Job Search',
     description: needsSponsorship
-      ? isGermany
-        ? 'Focus your search on companies registered to sponsor visas. International tech firms and larger German companies are most likely to sponsor. Use LinkedIn, StepStone (DE), and XING.'
-        : isUK
-          ? 'Focus on employers with a UK Home Office sponsor licence. Use LinkedIn, Glassdoor, and Reed.co.uk. Filter for "visa sponsorship available".'
-          : 'Search for roles with employers who can sponsor your visa.'
-      : 'Begin your job search using local and international job boards. You have flexibility in employer choice.',
+      ? `Focus your search on employers in ${dest} who can sponsor your visa. International tech companies and large local firms are most likely to offer sponsorship. ${data.market_demand.notes}`
+      : `Begin your job search in ${dest}. ${data.market_demand.notes}`,
     estimated_duration_weeks: 8,
     priority: 'critical',
   });
@@ -355,11 +343,7 @@ function buildActionSteps(
     rank: steps.length + 1,
     phase: 'Application',
     title: 'Tailor CV and Portfolio for Local Market',
-    description: isGermany
-      ? 'German CVs are typically concise (2 pages), include a professional photo, and list qualifications chronologically. Highlight quantifiable achievements and technical stack clearly.'
-      : isUK
-        ? 'UK CVs (called "CVs" not resumes) are typically 2 pages. No photo required. Focus on achievements with measurable outcomes.'
-        : 'Adapt your CV to local market conventions. Research what employers in this market prioritise.',
+    description: `Adapt your CV to ${dest} market conventions. Research what local employers prioritise and highlight relevant qualifications: ${data.credentials.required_qualifications.join(', ')}.`,
     estimated_duration_weeks: 2,
     priority: 'high',
   });
@@ -382,11 +366,7 @@ function buildActionSteps(
     rank: steps.length + 1,
     phase: 'Relocation',
     title: 'Pre-Relocation Planning',
-    description: isGermany
-      ? 'Arrange accommodation in advance — the German rental market is competitive, especially in Berlin and Munich. Open a German bank account (N26 or Deutsche Bank) once you have your visa. Register at the local Bürgeramt within 14 days of arrival (Anmeldung).'
-      : isUK
-        ? 'Arrange accommodation — London rental market requires quick decisions. Biometric Residence Permit (BRP) will arrive by post shortly after entry. Register with a GP early.'
-        : 'Plan accommodation, banking, and local registration requirements.',
+    description: `Plan accommodation, banking, and local registration requirements for ${dest}. Research arrival formalities and any mandatory registrations required after entry.`,
     estimated_duration_weeks: 4,
     priority: 'high',
   });

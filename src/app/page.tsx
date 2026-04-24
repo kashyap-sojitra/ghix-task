@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import Navbar from '@/components/Navbar';
+import { useAuthStore } from '@/store/auth.store';
 
 const features = [
   { icon: '🛂', title: 'Visa Routes', desc: 'Matched to your constraints and salary' },
@@ -11,6 +12,8 @@ const features = [
 ];
 
 export default function Home() {
+  const { user } = useAuthStore();
+
   return (
     <div className="flex flex-col min-h-screen bg-slate-50">
       <Navbar />
@@ -29,9 +32,15 @@ export default function Home() {
             <Link href="/generate" className="bg-blue-600 text-white px-7 py-3 rounded-lg font-semibold hover:bg-blue-700 transition-colors shadow-md text-base">
               Generate a Plan
             </Link>
-            <Link href="/register" className="bg-white border-2 border-slate-200 text-slate-700 px-7 py-3 rounded-lg font-semibold hover:border-slate-300 hover:bg-slate-50 transition-colors text-base">
-              Create Account
-            </Link>
+            {user ? (
+              <Link href="/plans" className="bg-white border-2 border-slate-200 text-slate-700 px-7 py-3 rounded-lg font-semibold hover:border-slate-300 hover:bg-slate-50 transition-colors text-base">
+                My Plans
+              </Link>
+            ) : (
+              <Link href="/register" className="bg-white border-2 border-slate-200 text-slate-700 px-7 py-3 rounded-lg font-semibold hover:border-slate-300 hover:bg-slate-50 transition-colors text-base">
+                Create Account
+              </Link>
+            )}
           </div>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-2">
             {features.map((f) => (

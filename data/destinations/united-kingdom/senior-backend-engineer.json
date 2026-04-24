@@ -1,0 +1,68 @@
+{
+  "destination": "United Kingdom",
+  "role_slug": "senior-backend-engineer",
+  "role_display_name": "Senior Backend Engineer",
+  "last_updated": "2025-01-01",
+  "salary": {
+    "currency_code": "GBP",
+    "min": 60000,
+    "median": 82000,
+    "max": 130000,
+    "sponsorship_minimum_threshold": 38700,
+    "data_confidence": "estimated"
+  },
+  "work_authorisation_routes": [
+    {
+      "name": "Skilled Worker Visa",
+      "type": "employer_sponsored",
+      "sponsorship_required": true,
+      "processing_time_months": { "min": 1, "max": 3 },
+      "salary_minimum_gbp": 38700,
+      "eligibility_criteria": [
+        "Job offer from a UK Home Office-licensed sponsor",
+        "Role must appear on the eligible occupation list (SOC code)",
+        "Salary meets the general threshold of £38,700 or the going rate, whichever is higher",
+        "English language at B1 level or above"
+      ],
+      "data_confidence": "estimated"
+    },
+    {
+      "name": "Global Talent Visa",
+      "type": "self_sponsored",
+      "sponsorship_required": false,
+      "processing_time_months": { "min": 2, "max": 4 },
+      "salary_minimum_gbp": 0,
+      "eligibility_criteria": [
+        "Endorsement from Tech Nation or another approved endorsing body",
+        "Demonstrated exceptional talent or exceptional promise in digital technology",
+        "No salary minimum, but strong portfolio evidence is required"
+      ],
+      "data_confidence": "estimated"
+    }
+  ],
+  "credentials": {
+    "required_qualifications": [
+      "Bachelor's degree in Computer Science, Software Engineering, or equivalent demonstrable experience",
+      "5+ years of professional backend development experience"
+    ],
+    "language_requirements": [
+      "English B1 minimum (CEFR) required for Skilled Worker Visa",
+      "Approved tests include IELTS, TOEFL iBT, and PTE Academic"
+    ],
+    "degree_equivalency_notes": "UK ENIC provides official degree comparability statements for overseas qualifications. Most international CS degrees are recognised. Experience-based equivalency is accepted for the Skilled Worker Visa route if 5+ years are demonstrated.",
+    "data_confidence": "estimated"
+  },
+  "timeline": {
+    "typical_hiring_duration_months": { "min": 2, "max": 4 },
+    "fastest_auth_processing_months": 1,
+    "slowest_auth_processing_months": 4,
+    "total_estimated_time_to_start_months": { "min": 3, "max": 8 },
+    "data_confidence": "estimated"
+  },
+  "market_demand": {
+    "level": "high",
+    "demand_scale_definition": "high = >500 active postings/month; medium = 100–500; low = <100",
+    "notes": "London remains a top European tech hub with very high demand for senior backend engineers. Manchester and Edinburgh also show strong demand. Fintech, healthtech, and e-commerce sectors are particularly active.",
+    "data_confidence": "estimated"
+  }
+}

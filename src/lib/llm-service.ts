@@ -1,4 +1,4 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleGenerativeAI, SchemaType } from '@google/generative-ai';
 import { DestinationRoleData } from './data-service';
 
 export interface LlmPlanInput {
@@ -10,7 +10,7 @@ export interface LlmPlanInput {
   salary_expectation: number;
   salary_currency: string;
   timeline_months: number;
-  currency_code: string;
+  destination_data: DestinationRoleData;
   work_authorisation_constraint: string;
 }
 
@@ -24,19 +24,14 @@ export interface LlmActionStep {
 }
 
 export interface LlmPlanOutput {
-  destination_data: DestinationRoleData;
-  narrative_summary: string;
+  narrative_summary: string | null;
   action_steps: LlmActionStep[];
-  llm_used: string;
+  llm_used: string | null;
   llm_status: 'success' | 'error' | 'skipped';
+  llm_error: string | null;
 }
 
-const GEMINI_MODELS = [
-  'gemini-3.1-flash-lite-preview',
-  'gemini-2.5-flash-preview-05-20',
-  'gemini-2.0-flash-lite',
-  'gemini-2.0-flash',
-];
+const DEFAULT_MODEL = 'gemini-3.1-flash-lite-preview';
 
 function getGeminiClient(): GoogleGenerativeAI | null {
   const apiKey = process.env.LLM_API_KEY;
@@ -44,171 +39,147 @@ function getGeminiClient(): GoogleGenerativeAI | null {
   return new GoogleGenerativeAI(apiKey);
 }
 
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function getRetryDelay(err: unknown): number | null {
-  const e = err as { errorDetails?: Array<{ '@type': string; retryDelay?: string }> };
-  const retryInfo = e?.errorDetails?.find((d) => d['@type'] === 'type.googleapis.com/google.rpc.RetryInfo');
-  if (!retryInfo?.retryDelay) return null;
-  const seconds = parseFloat(retryInfo.retryDelay.replace('s', ''));
-  return isNaN(seconds) ? null : Math.ceil(seconds) * 1000;
-}
-
-async function geminiGenerate(prompt: string): Promise<{ text: string; model: string } | null> {
+async function geminiGenerate(prompt: string): Promise<{ text: string; model: string } | { error: string; model: string }> {
   const client = getGeminiClient();
+  const modelName = process.env.LLM_MODEL ?? DEFAULT_MODEL;
+
   if (!client) {
-    console.error('[LLM] Gemini client not initialized — LLM_API_KEY is missing');
-    return null;
+    const msg = 'LLM_API_KEY is not set';
+    console.error(`[LLM] ${msg}`);
+    return { error: msg, model: modelName };
   }
 
-  const timeoutMs = parseInt(process.env.LLM_TIMEOUT_MS ?? '60000');
-
-  for (const modelName of GEMINI_MODELS) {
-    let lastErr: unknown;
-
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const model = client.getGenerativeModel({ model: modelName });
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), timeoutMs);
-        const result = await model.generateContent(prompt);
-        clearTimeout(timeout);
-        console.log(`[LLM] Success with model: ${modelName}`);
-        return { text: result.response.text(), model: modelName };
-      } catch (err) {
-        lastErr = err;
-        const status = (err as { status?: number }).status;
-
-        if (status === 429 && attempt === 0) {
-          const delay = getRetryDelay(err) ?? 5000;
-          console.warn(`[LLM] Rate limited on ${modelName}, retrying in ${delay}ms…`);
-          await sleep(delay);
-          continue;
-        }
-
-        if (status === 404) {
-          console.warn(`[LLM] Model ${modelName} not found, trying next…`);
-          break;
-        }
-
-        console.error(`[LLM] Call failed on ${modelName}:`, err);
-        break;
-      }
-    }
-
-    const status = (lastErr as { status?: number })?.status;
-    if (status !== 404 && status !== 429) break;
+  try {
+    const model = client.getGenerativeModel({
+      model: modelName,
+      generationConfig: {
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: SchemaType.OBJECT,
+          properties: {
+            narrative_summary: { type: SchemaType.STRING },
+            action_steps: {
+              type: SchemaType.ARRAY,
+              items: {
+                type: SchemaType.OBJECT,
+                properties: {
+                  rank: { type: SchemaType.NUMBER },
+                  phase: { type: SchemaType.STRING },
+                  title: { type: SchemaType.STRING },
+                  description: { type: SchemaType.STRING },
+                  estimated_duration_weeks: { type: SchemaType.NUMBER },
+                  priority: { type: SchemaType.STRING },
+                },
+                required: ['rank', 'phase', 'title', 'description', 'estimated_duration_weeks', 'priority'],
+              },
+            },
+          },
+          required: ['narrative_summary', 'action_steps'],
+        },
+      },
+    });
+    const result = await model.generateContent(prompt);
+    const text = result.response.text();
+    console.log(`[LLM] Success — model: ${modelName}, response length: ${text.length}`);
+    return { text, model: modelName };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[LLM] Call failed on ${modelName}:`, msg);
+    return { error: msg, model: modelName };
   }
-
-  return null;
 }
 
-const SYSTEM_PROMPT = `You are a career relocation advisor and labor market expert. Return ONLY valid JSON with no markdown, no code fences, no extra text. Use real, current data. All salary figures must be realistic annual gross amounts in the specified currency.`;
+const SYSTEM_PROMPT = `You are a career relocation advisor. Return ONLY valid JSON — no markdown, no code fences, no extra text.`;
 
-export async function generatePlanFromAI(input: LlmPlanInput): Promise<LlmPlanOutput | null> {
-  const salaryField = input.currency_code === 'GBP' ? '"salary_minimum_gbp"' : '"salary_minimum_eur"';
+export async function generatePlanFromAI(input: LlmPlanInput): Promise<LlmPlanOutput> {
+  const d = input.destination_data;
   const needsSponsorship = input.work_authorisation_constraint === 'needs_employer_sponsorship';
+  const routeNames = d.work_authorisation_routes.map((r) => r.name).join(', ');
 
   const prompt = `${SYSTEM_PROMPT}
 
-Generate a career relocation plan for someone moving from ${input.origin_country} to ${input.destination_country} as a ${input.role_display_name}.
+You are writing the narrative and action plan for a career relocation. All structured data has already been determined — do NOT invent numbers. Use the facts below only as context.
 
-User context (for narrative only):
+DESTINATION FACTS:
+- Destination: ${d.destination}
+- Role: ${d.role_display_name}
+- Salary range: ${d.salary.currency_code}${d.salary.min.toLocaleString()}–${d.salary.max.toLocaleString()} (median ${d.salary.currency_code}${d.salary.median.toLocaleString()})
+- Available visa routes: ${routeNames}
+- Typical hiring duration: ${d.timeline.typical_hiring_duration_months.min}–${d.timeline.typical_hiring_duration_months.max} months
+- Market demand: ${d.market_demand.level} — ${d.market_demand.notes}
+
+USER CONTEXT:
+- Origin: ${input.origin_country}
 - Current role: ${input.current_role}
 - Salary expectation: ${input.salary_currency}${input.salary_expectation.toLocaleString()} per year
 - Target timeline: ${input.timeline_months} months
 - Needs employer sponsorship: ${needsSponsorship}
 
-IMPORTANT: The destination_data section must reflect REAL, OBJECTIVE market conditions for ${input.destination_country} — do NOT adjust visa processing times, salary thresholds, or hiring durations to match the user's timeline or salary. Return accurate data even if it conflicts with the user's expectations. Honest conflict detection depends on this.
-
-Return a single JSON object:
-
+Return this exact JSON structure:
 {
-  "destination_data": {
-    "destination": "${input.destination_country}",
-    "role_slug": "${input.target_role}",
-    "role_display_name": "${input.role_display_name}",
-    "last_updated": "${new Date().toISOString().split('T')[0]}",
-    "salary": {
-      "currency_code": "${input.currency_code}",
-      "min": <realistic annual gross minimum as integer>,
-      "median": <realistic annual gross median as integer>,
-      "max": <realistic annual gross maximum as integer>,
-      "sponsorship_minimum_threshold": <real minimum salary legally required for the most common sponsored visa — must be accurate>,
-      "data_confidence": "estimated"
-    },
-    "work_authorisation_routes": [
-      {
-        "name": "<official visa/route name>",
-        "type": "<employer_sponsored | self_sponsored | treaty>",
-        "sponsorship_required": <true | false>,
-        "processing_time_months": { "min": <realistic int — do not understate>, "max": <realistic int> },
-        ${salaryField}: <real legal salary threshold as integer — must be accurate, not 0 unless genuinely no threshold>,
-        "eligibility_criteria": ["<criterion>"],
-        "data_confidence": "estimated"
-      }
-    ],
-    "credentials": {
-      "required_qualifications": ["<qualification>"],
-      "language_requirements": ["<requirement>"],
-      "degree_equivalency_notes": "<notes>",
-      "data_confidence": "estimated"
-    },
-    "timeline": {
-      "typical_hiring_duration_months": { "min": <realistic int>, "max": <realistic int> },
-      "fastest_auth_processing_months": <realistic int — do not understate>,
-      "slowest_auth_processing_months": <realistic int>,
-      "total_estimated_time_to_start_months": { "min": <int>, "max": <int> },
-      "data_confidence": "estimated"
-    },
-    "market_demand": {
-      "level": "<high | medium | low>",
-      "demand_scale_definition": "high = >500 active postings/month; medium = 100-500; low = <100",
-      "notes": "<current market conditions>",
-      "data_confidence": "estimated"
-    }
-  },
-  "narrative_summary": "<2-paragraph honest summary — if the user's timeline or salary is unrealistic given the data, say so clearly>",
+  "narrative_summary": "2-paragraph honest summary. If the user's timeline or salary is tight, say so explicitly.",
   "action_steps": [
     {
       "rank": 1,
-      "phase": "<Preparation | Job Search | Application | Visa Application | Relocation>",
-      "title": "<short action title>",
-      "description": "<2-3 sentences specific to ${input.destination_country} — include real local resources, agencies, websites>",
-      "estimated_duration_weeks": <integer>,
-      "priority": "<critical | high | medium | low>"
+      "phase": "Preparation",
+      "title": "step title",
+      "description": "2-3 sentences referencing real ${input.destination_country}-specific resources (websites, government bodies, agencies)",
+      "estimated_duration_weeks": 4,
+      "priority": "critical"
     }
   ]
 }
 
-Rules for action_steps:
-- 5-7 steps covering: credential verification, job search, CV adaptation, visa application, pre-relocation setup
-- Every step must name real ${input.destination_country}-specific resources (websites, agencies, government bodies)
-- Name the actual visa route in the visa step
+Rules:
+- 5–7 steps covering: credential verification, job search, CV adaptation, visa application, pre-relocation setup
+- Name the actual visa route (${routeNames}) in the visa step
+- Every description must name a real ${input.destination_country}-specific resource
+- phase must be one of: Preparation, Job Search, Application, Visa Application, Relocation
+- priority must be one of: critical, high, medium, low
 - Order by rank starting at 1`;
 
-  const result = await geminiGenerate(prompt);
-  if (!result) return null;
+  const raw = await geminiGenerate(prompt);
+
+  if ('error' in raw) {
+    return {
+      narrative_summary: null,
+      action_steps: [],
+      llm_used: raw.model,
+      llm_status: 'error',
+      llm_error: raw.error,
+    };
+  }
 
   try {
-    const cleaned = result.text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    const cleaned = raw.text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
     const parsed = JSON.parse(cleaned) as {
-      destination_data: DestinationRoleData;
       narrative_summary: string;
       action_steps: LlmActionStep[];
     };
 
+    console.log('[LLM] Parsed keys:', Object.keys(parsed));
+    console.log('[LLM] action_steps count:', parsed.action_steps?.length ?? 0);
+    if (!parsed.action_steps || parsed.action_steps.length === 0) {
+      console.warn('[LLM] action_steps empty — raw response:', raw.text.slice(0, 800));
+    }
+
     return {
-      destination_data: parsed.destination_data,
       narrative_summary: parsed.narrative_summary ?? null,
-      action_steps: parsed.action_steps ?? null,
-      llm_used: result.model,
+      action_steps: parsed.action_steps ?? [],
+      llm_used: raw.model,
       llm_status: 'success',
+      llm_error: null,
     };
   } catch (err) {
-    console.error('[LLM] Failed to parse combined plan response:', err);
-    return null;
+    const msg = `JSON parse failed: ${err instanceof Error ? err.message : String(err)}`;
+    console.error('[LLM]', msg);
+    console.error('[LLM] Raw text:', raw.text.slice(0, 500));
+    return {
+      narrative_summary: null,
+      action_steps: [],
+      llm_used: raw.model,
+      llm_status: 'error',
+      llm_error: msg,
+    };
   }
 }

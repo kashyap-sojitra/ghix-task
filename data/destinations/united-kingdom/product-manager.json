@@ -1,0 +1,68 @@
+{
+  "destination": "United Kingdom",
+  "role_slug": "product-manager",
+  "role_display_name": "Product Manager",
+  "last_updated": "2025-01-01",
+  "salary": {
+    "currency_code": "GBP",
+    "min": 55000,
+    "median": 72000,
+    "max": 110000,
+    "sponsorship_minimum_threshold": 38700,
+    "data_confidence": "estimated"
+  },
+  "work_authorisation_routes": [
+    {
+      "name": "Skilled Worker Visa",
+      "type": "employer_sponsored",
+      "sponsorship_required": true,
+      "processing_time_months": { "min": 1, "max": 3 },
+      "salary_minimum_gbp": 38700,
+      "eligibility_criteria": [
+        "Job offer from a UK Home Office-licensed sponsor",
+        "Role classified under an eligible SOC code for Product Manager",
+        "Salary meets the general threshold or the going rate for the occupation",
+        "English language at B1 level minimum"
+      ],
+      "data_confidence": "estimated"
+    },
+    {
+      "name": "Global Talent Visa",
+      "type": "self_sponsored",
+      "sponsorship_required": false,
+      "processing_time_months": { "min": 3, "max": 5 },
+      "salary_minimum_gbp": 0,
+      "eligibility_criteria": [
+        "Endorsement from Tech Nation under the digital technology track",
+        "Evidence of significant product leadership contribution at industry level",
+        "Published work, conference talks, or notable product launches required"
+      ],
+      "data_confidence": "estimated"
+    }
+  ],
+  "credentials": {
+    "required_qualifications": [
+      "Bachelor's degree in Business, Engineering, Computer Science, or equivalent",
+      "3+ years of product management experience with demonstrable business impact"
+    ],
+    "language_requirements": [
+      "English B1 minimum (CEFR) for Skilled Worker Visa",
+      "Native or near-native English strongly preferred by most UK employers"
+    ],
+    "degree_equivalency_notes": "UK ENIC provides equivalency statements for foreign degrees. Business degrees from accredited universities worldwide are generally recognised. AACSB or EQUIS accreditation aids recognition.",
+    "data_confidence": "estimated"
+  },
+  "timeline": {
+    "typical_hiring_duration_months": { "min": 2, "max": 5 },
+    "fastest_auth_processing_months": 1,
+    "slowest_auth_processing_months": 5,
+    "total_estimated_time_to_start_months": { "min": 3, "max": 10 },
+    "data_confidence": "estimated"
+  },
+  "market_demand": {
+    "level": "medium",
+    "demand_scale_definition": "high = >500 active postings/month; medium = 100–500; low = <100",
+    "notes": "Product Manager roles in the UK are heavily concentrated in London. Competition is moderate to high with many experienced candidates. Fintech and e-commerce sectors offer the most openings for international hires.",
+    "data_confidence": "estimated"
+  }
+}
