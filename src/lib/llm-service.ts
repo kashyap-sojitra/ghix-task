@@ -1,5 +1,5 @@
-import { GoogleGenerativeAI, SchemaType } from '@google/generative-ai';
-import { DestinationRoleData } from './data-service';
+import { GoogleGenerativeAI, SchemaType } from "@google/generative-ai";
+import { DestinationRoleData } from "./data-service";
 
 export interface LlmPlanInput {
   origin_country: string;
@@ -20,18 +20,18 @@ export interface LlmActionStep {
   title: string;
   description: string;
   estimated_duration_weeks: number;
-  priority: 'critical' | 'high' | 'medium' | 'low';
+  priority: "critical" | "high" | "medium" | "low";
 }
 
 export interface LlmPlanOutput {
   narrative_summary: string | null;
   action_steps: LlmActionStep[];
   llm_used: string | null;
-  llm_status: 'success' | 'error' | 'skipped';
+  llm_status: "success" | "error" | "skipped";
   llm_error: string | null;
 }
 
-const DEFAULT_MODEL = 'gemini-3.1-flash-lite-preview';
+const DEFAULT_MODEL = "gemini-3.1-flash-lite-preview";
 
 function getGeminiClient(): GoogleGenerativeAI | null {
   const apiKey = process.env.LLM_API_KEY;
@@ -39,12 +39,14 @@ function getGeminiClient(): GoogleGenerativeAI | null {
   return new GoogleGenerativeAI(apiKey);
 }
 
-async function geminiGenerate(prompt: string): Promise<{ text: string; model: string } | { error: string; model: string }> {
+async function geminiGenerate(
+  prompt: string,
+): Promise<{ text: string; model: string } | { error: string; model: string }> {
   const client = getGeminiClient();
   const modelName = process.env.LLM_MODEL ?? DEFAULT_MODEL;
 
   if (!client) {
-    const msg = 'LLM_API_KEY is not set';
+    const msg = "LLM_API_KEY is not set";
     console.error(`[LLM] ${msg}`);
     return { error: msg, model: modelName };
   }
@@ -53,7 +55,7 @@ async function geminiGenerate(prompt: string): Promise<{ text: string; model: st
     const model = client.getGenerativeModel({
       model: modelName,
       generationConfig: {
-        responseMimeType: 'application/json',
+        responseMimeType: "application/json",
         responseSchema: {
           type: SchemaType.OBJECT,
           properties: {
@@ -70,17 +72,26 @@ async function geminiGenerate(prompt: string): Promise<{ text: string; model: st
                   estimated_duration_weeks: { type: SchemaType.NUMBER },
                   priority: { type: SchemaType.STRING },
                 },
-                required: ['rank', 'phase', 'title', 'description', 'estimated_duration_weeks', 'priority'],
+                required: [
+                  "rank",
+                  "phase",
+                  "title",
+                  "description",
+                  "estimated_duration_weeks",
+                  "priority",
+                ],
               },
             },
           },
-          required: ['narrative_summary', 'action_steps'],
+          required: ["narrative_summary", "action_steps"],
         },
       },
     });
     const result = await model.generateContent(prompt);
     const text = result.response.text();
-    console.log(`[LLM] Success — model: ${modelName}, response length: ${text.length}`);
+    console.log(
+      `[LLM] Success — model: ${modelName}, response length: ${text.length}`,
+    );
     return { text, model: modelName };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -91,10 +102,13 @@ async function geminiGenerate(prompt: string): Promise<{ text: string; model: st
 
 const SYSTEM_PROMPT = `You are a career relocation advisor. Return ONLY valid JSON — no markdown, no code fences, no extra text.`;
 
-export async function generatePlanFromAI(input: LlmPlanInput): Promise<LlmPlanOutput> {
+export async function generatePlanFromAI(
+  input: LlmPlanInput,
+): Promise<LlmPlanOutput> {
   const d = input.destination_data;
-  const needsSponsorship = input.work_authorisation_constraint === 'needs_employer_sponsorship';
-  const routeNames = d.work_authorisation_routes.map((r) => r.name).join(', ');
+  const needsSponsorship =
+    input.work_authorisation_constraint === "needs_employer_sponsorship";
+  const routeNames = d.work_authorisation_routes.map((r) => r.name).join(", ");
 
   const prompt = `${SYSTEM_PROMPT}
 
@@ -140,45 +154,51 @@ Rules:
 
   const raw = await geminiGenerate(prompt);
 
-  if ('error' in raw) {
+  if ("error" in raw) {
     return {
       narrative_summary: null,
       action_steps: [],
       llm_used: raw.model,
-      llm_status: 'error',
+      llm_status: "error",
       llm_error: raw.error,
     };
   }
 
   try {
-    const cleaned = raw.text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    const cleaned = raw.text
+      .replace(/```json\n?/g, "")
+      .replace(/```\n?/g, "")
+      .trim();
     const parsed = JSON.parse(cleaned) as {
       narrative_summary: string;
       action_steps: LlmActionStep[];
     };
 
-    console.log('[LLM] Parsed keys:', Object.keys(parsed));
-    console.log('[LLM] action_steps count:', parsed.action_steps?.length ?? 0);
+    console.log("[LLM] Parsed keys:", Object.keys(parsed));
+    console.log("[LLM] action_steps count:", parsed.action_steps?.length ?? 0);
     if (!parsed.action_steps || parsed.action_steps.length === 0) {
-      console.warn('[LLM] action_steps empty — raw response:', raw.text.slice(0, 800));
+      console.warn(
+        "[LLM] action_steps empty — raw response:",
+        raw.text.slice(0, 800),
+      );
     }
 
     return {
       narrative_summary: parsed.narrative_summary ?? null,
       action_steps: parsed.action_steps ?? [],
       llm_used: raw.model,
-      llm_status: 'success',
+      llm_status: "success",
       llm_error: null,
     };
   } catch (err) {
     const msg = `JSON parse failed: ${err instanceof Error ? err.message : String(err)}`;
-    console.error('[LLM]', msg);
-    console.error('[LLM] Raw text:', raw.text.slice(0, 500));
+    console.error("[LLM]", msg);
+    console.error("[LLM] Raw text:", raw.text.slice(0, 500));
     return {
       narrative_summary: null,
       action_steps: [],
       llm_used: raw.model,
-      llm_status: 'error',
+      llm_status: "error",
       llm_error: msg,
     };
   }

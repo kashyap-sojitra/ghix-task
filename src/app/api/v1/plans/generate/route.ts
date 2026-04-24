@@ -1,12 +1,12 @@
-import { NextRequest } from 'next/server';
-import { requireUser } from '@/lib/auth';
-import { generatePlan, WorkAuthConstraint } from '@/lib/relocation-engine';
-import { ok, handleError } from '@/lib/api-response';
+import { NextRequest } from "next/server";
+import { requireUser } from "@/lib/auth";
+import { generatePlan, WorkAuthConstraint } from "@/lib/relocation-engine";
+import { ok, handleError } from "@/lib/api-response";
 
 export async function POST(request: NextRequest) {
   try {
     requireUser(request);
-    const body = await request.json() as {
+    const body = (await request.json()) as {
       origin_country: string;
       destination_country: string;
       current_role: string;

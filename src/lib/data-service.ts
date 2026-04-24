@@ -1,5 +1,5 @@
-import fs from 'fs';
-import path from 'path';
+import fs from "fs";
+import path from "path";
 
 export interface WorkAuthRoute {
   name: string;
@@ -56,12 +56,14 @@ export interface DestinationIndex {
   }>;
 }
 
-const dataPath = path.join(process.cwd(), 'data', 'destinations');
+const dataPath = path.join(process.cwd(), "data", "destinations");
 let index: DestinationIndex | null = null;
 
 function loadIndex(): DestinationIndex {
   if (index) return index;
-  index = JSON.parse(fs.readFileSync(path.join(dataPath, 'index.json'), 'utf-8')) as DestinationIndex;
+  index = JSON.parse(
+    fs.readFileSync(path.join(dataPath, "index.json"), "utf-8"),
+  ) as DestinationIndex;
   return index;
 }
 
@@ -69,19 +71,19 @@ export function getIndex(): DestinationIndex {
   return loadIndex();
 }
 
-export function getSupportedRolesForDestination(destination: string): Array<{ slug: string; display_name: string }> | null {
-  const entry = loadIndex().supported_combinations.find((c) => c.destination_slug === destination);
-  return entry ? entry.roles : null;
-}
-
-export function getDestinationRoleData(destinationSlug: string, roleSlug: string): DestinationRoleData | null {
+export function getDestinationRoleData(
+  destinationSlug: string,
+  roleSlug: string,
+): DestinationRoleData | null {
   const idx = loadIndex();
-  const combo = idx.supported_combinations.find((c) => c.destination_slug === destinationSlug);
+  const combo = idx.supported_combinations.find(
+    (c) => c.destination_slug === destinationSlug,
+  );
   if (!combo) return null;
   const role = combo.roles.find((r) => r.slug === roleSlug);
   if (!role) return null;
 
   const filePath = path.join(dataPath, destinationSlug, `${roleSlug}.json`);
   if (!fs.existsSync(filePath)) return null;
-  return JSON.parse(fs.readFileSync(filePath, 'utf-8')) as DestinationRoleData;
+  return JSON.parse(fs.readFileSync(filePath, "utf-8")) as DestinationRoleData;
 }

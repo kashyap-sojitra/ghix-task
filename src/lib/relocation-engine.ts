@@ -1,11 +1,18 @@
-import { DestinationRoleData, WorkAuthRoute, getDestinationRoleData } from './data-service';
-import { generatePlanFromAI, LlmActionStep } from './llm-service';
-import { ApiError } from './api-response';
+import {
+  DestinationRoleData,
+  WorkAuthRoute,
+  getDestinationRoleData,
+} from "./data-service";
+import { generatePlanFromAI, LlmActionStep } from "./llm-service";
+import { ApiError } from "./api-response";
 
-export type WorkAuthConstraint = 'needs_employer_sponsorship' | 'no_constraint' | 'already_has_right_to_work';
-export type FeasibilityScore = 'feasible' | 'at_risk' | 'infeasible';
-export type Priority = 'critical' | 'high' | 'medium' | 'low';
-export type DataConfidenceLevel = 'verified' | 'estimated' | 'placeholder';
+export type WorkAuthConstraint =
+  | "needs_employer_sponsorship"
+  | "no_constraint"
+  | "already_has_right_to_work";
+export type FeasibilityScore = "feasible" | "at_risk" | "infeasible";
+export type Priority = "critical" | "high" | "medium" | "low";
+export type DataConfidenceLevel = "verified" | "estimated" | "placeholder";
 
 export interface ActionStep {
   rank: number;
@@ -14,7 +21,7 @@ export interface ActionStep {
   description: string;
   estimated_duration_weeks: number;
   priority: Priority;
-}  
+}
 
 export interface EligibleRoute {
   route_name: string;
@@ -37,7 +44,7 @@ export interface SalaryAssessment {
   minimum_threshold: number;
   shortfall_from_threshold: number | null;
   shortfall_from_median: number | null;
-  verdict: 'below_median_but_eligible' | 'above_median' | 'below_threshold';
+  verdict: "below_median_but_eligible" | "above_median" | "below_threshold";
 }
 
 export interface PlanOutput {
@@ -53,7 +60,10 @@ export interface PlanOutput {
   };
   salary_assessment: SalaryAssessment;
   market_demand: { level: string; notes: string };
-  data_confidence: { overall: DataConfidenceLevel; fields: Record<string, DataConfidenceLevel> };
+  data_confidence: {
+    overall: DataConfidenceLevel;
+    fields: Record<string, DataConfidenceLevel>;
+  };
   meta: {
     generated_at: string;
     llm_used: string | null;
@@ -74,9 +84,17 @@ export interface GeneratePlanInput {
   work_authorisation_constraint: WorkAuthConstraint;
 }
 
-function filterByConstraint(routes: WorkAuthRoute[], constraint: WorkAuthConstraint): WorkAuthRoute[] {
-  if (constraint === 'needs_employer_sponsorship') {
-    return routes.filter((r) => r.sponsorship_required || r.type === 'employer_sponsored');
+function filterByConstraint(
+  routes: WorkAuthRoute[],
+  constraint: WorkAuthConstraint,
+): WorkAuthRoute[] {
+  if (constraint === "needs_employer_sponsorship") {
+    return routes.filter(
+      (r) => r.sponsorship_required || r.type === "employer_sponsored",
+    );
+  }
+  if (constraint === "already_has_right_to_work") {
+    return routes.filter((r) => !r.sponsorship_required);
   }
   return routes;
 }
@@ -102,10 +120,14 @@ function checkSalary(
   }
 
   if (eligibleRoutes.length === 0) {
-    const lowestThreshold = Math.min(...candidateRoutes.map((r) => r.salary_minimum_eur ?? r.salary_minimum_gbp ?? 0));
+    const lowestThreshold = Math.min(
+      ...candidateRoutes.map(
+        (r) => r.salary_minimum_eur ?? r.salary_minimum_gbp ?? 0,
+      ),
+    );
     const shortfall = lowestThreshold - userSalary;
     throw new ApiError(
-      'SALARY_SHORTFALL',
+      "SALARY_SHORTFALL",
       `Your salary expectation of ${currency}${userSalary.toLocaleString()} falls below the minimum threshold of ${currency}${lowestThreshold.toLocaleString()} by ${currency}${shortfall.toLocaleString()}. You are ineligible for all available sponsorship routes at this salary.`,
       422,
       {
@@ -116,16 +138,17 @@ function checkSalary(
           currency,
           affected_routes: candidateRoutes.map((r) => r.name),
         },
-      }
+      },
     );
   }
 
-  const shortfallFromThreshold = threshold > userSalary ? threshold - userSalary : null;
+  const shortfallFromThreshold =
+    threshold > userSalary ? threshold - userSalary : null;
   const shortfallFromMedian = median - userSalary;
-  let verdict: SalaryAssessment['verdict'];
-  if (shortfallFromThreshold !== null) verdict = 'below_threshold';
-  else if (userSalary < median) verdict = 'below_median_but_eligible';
-  else verdict = 'above_median';
+  let verdict: SalaryAssessment["verdict"];
+  if (shortfallFromThreshold !== null) verdict = "below_threshold";
+  else if (userSalary < median) verdict = "below_median_but_eligible";
+  else verdict = "above_median";
 
   return {
     eligibleRoutes,
@@ -135,56 +158,82 @@ function checkSalary(
       market_median: median,
       minimum_threshold: threshold,
       shortfall_from_threshold: shortfallFromThreshold,
-      shortfall_from_median: shortfallFromMedian > 0 ? shortfallFromMedian : null,
+      shortfall_from_median:
+        shortfallFromMedian > 0 ? shortfallFromMedian : null,
       verdict,
     },
   };
 }
 
-function checkTimeline(userMonths: number, data: DestinationRoleData, eligibleRoutes: WorkAuthRoute[]): void {
+function checkTimeline(
+  userMonths: number,
+  data: DestinationRoleData,
+  eligibleRoutes: WorkAuthRoute[],
+): void {
   const minHiring = data.timeline.typical_hiring_duration_months.min;
   const fastestRoute = eligibleRoutes.reduce(
-    (prev, curr) => (curr.processing_time_months.min < prev.processing_time_months.min ? curr : prev),
+    (prev, curr) =>
+      curr.processing_time_months.min < prev.processing_time_months.min
+        ? curr
+        : prev,
     eligibleRoutes[0],
   );
-  const minimumRequired = Math.ceil(fastestRoute.processing_time_months.min) + minHiring;
+  const minimumRequired =
+    Math.ceil(fastestRoute.processing_time_months.min) + minHiring;
 
   if (userMonths < minimumRequired) {
     throw new ApiError(
-      'TIMELINE_CONFLICT',
+      "TIMELINE_CONFLICT",
       `Your stated timeline of ${userMonths} month(s) cannot accommodate the fastest available work authorisation route (${fastestRoute.name}: minimum ${Math.ceil(fastestRoute.processing_time_months.min)} months processing) plus hiring (minimum ${minHiring} months). Earliest realistic start: ${minimumRequired} months.`,
       409,
       {
         conflict_details: {
           user_timeline_months: userMonths,
-          fastest_route_months: Math.ceil(fastestRoute.processing_time_months.min),
+          fastest_route_months: Math.ceil(
+            fastestRoute.processing_time_months.min,
+          ),
           fastest_hiring_months: minHiring,
           minimum_required_months: minimumRequired,
           fastest_route_name: fastestRoute.name,
         },
-      }
+      },
     );
   }
 }
 
-export async function generatePlan(input: GeneratePlanInput): Promise<PlanOutput> {
+export async function generatePlan(
+  input: GeneratePlanInput,
+): Promise<PlanOutput> {
   // Load static JSON data — throws DATA_NOT_COVERED if destination+role not in data layer
-  const data = getDestinationRoleData(input.destination_country, input.target_role);
+  const data = getDestinationRoleData(
+    input.destination_country,
+    input.target_role,
+  );
   if (!data) {
     throw new ApiError(
-      'DATA_NOT_COVERED',
+      "DATA_NOT_COVERED",
       `No data available for destination "${input.destination_country}" with role "${input.target_role}". This combination is not currently supported.`,
       404,
     );
   }
 
   // Deterministic checks on static JSON data
-  const constraintFiltered = filterByConstraint(data.work_authorisation_routes, input.work_authorisation_constraint);
-  const { eligibleRoutes, salaryAssessment } = checkSalary(input.salary_expectation, data, constraintFiltered);
+  const constraintFiltered = filterByConstraint(
+    data.work_authorisation_routes,
+    input.work_authorisation_constraint,
+  );
+  const { eligibleRoutes, salaryAssessment } = checkSalary(
+    input.salary_expectation,
+    data,
+    constraintFiltered,
+  );
   checkTimeline(input.timeline_months, data, eligibleRoutes);
 
   const feasibility = buildFeasibility(input, data, salaryAssessment);
-  const eligibleRoutesFormatted = formatRoutes(eligibleRoutes, input.salary_expectation);
+  const eligibleRoutesFormatted = formatRoutes(
+    eligibleRoutes,
+    input.salary_expectation,
+  );
   const timelineBreakdown = buildTimeline(input, data, eligibleRoutes);
   const dataConfidence = aggregateConfidence(data);
 
@@ -214,14 +263,17 @@ export async function generatePlan(input: GeneratePlanInput): Promise<PlanOutput
     narrative_summary: llmResult?.narrative_summary ?? null,
     timeline_breakdown: timelineBreakdown,
     salary_assessment: salaryAssessment,
-    market_demand: { level: data.market_demand.level, notes: data.market_demand.notes },
+    market_demand: {
+      level: data.market_demand.level,
+      notes: data.market_demand.notes,
+    },
     data_confidence: dataConfidence,
     meta: {
       generated_at: new Date().toISOString(),
       llm_used: llmResult?.llm_used ?? null,
-      llm_status: llmResult?.llm_status ?? 'skipped',
+      llm_status: llmResult?.llm_status ?? "skipped",
       llm_error: llmResult?.llm_error ?? null,
-      deterministic_check_version: '1.0.0',
+      deterministic_check_version: "1.0.0",
     },
   };
 }
@@ -234,20 +286,33 @@ function buildFeasibility(
   const warnings: string[] = [];
   const conflicts: string[] = [];
 
-  if (salaryAssessment.verdict === 'below_median_but_eligible') {
+  if (salaryAssessment.verdict === "below_median_but_eligible") {
     warnings.push(
-      `Salary expectation is below market median of ${salaryAssessment.currency}${salaryAssessment.market_median.toLocaleString()}`
+      `Salary expectation is below market median of ${salaryAssessment.currency}${salaryAssessment.market_median.toLocaleString()}`,
     );
   }
-  if (input.timeline_months < data.timeline.total_estimated_time_to_start_months.min + 1) {
-    warnings.push('Your timeline is tight — at the lower bound of realistic estimates. Build in buffer.');
+  if (
+    input.timeline_months <
+    data.timeline.total_estimated_time_to_start_months.min + 1
+  ) {
+    warnings.push(
+      "Your timeline is tight — at the lower bound of realistic estimates. Build in buffer.",
+    );
   }
 
-  const score: FeasibilityScore = conflicts.length > 0 ? 'infeasible' : warnings.length > 1 ? 'at_risk' : 'feasible';
+  const score: FeasibilityScore =
+    conflicts.length > 0
+      ? "infeasible"
+      : warnings.length > 1
+        ? "at_risk"
+        : "feasible";
   return { score, conflicts, warnings };
 }
 
-function formatRoutes(routes: WorkAuthRoute[], userSalary: number): EligibleRoute[] {
+function formatRoutes(
+  routes: WorkAuthRoute[],
+  userSalary: number,
+): EligibleRoute[] {
   return routes.map((route) => {
     const routeMin = route.salary_minimum_eur ?? route.salary_minimum_gbp ?? 0;
     const gap = routeMin - userSalary;
@@ -265,35 +330,48 @@ function buildTimeline(
   input: GeneratePlanInput,
   data: DestinationRoleData,
   eligibleRoutes: WorkAuthRoute[],
-): PlanOutput['timeline_breakdown'] {
+): PlanOutput["timeline_breakdown"] {
   const hiringMin = data.timeline.typical_hiring_duration_months.min;
   const hiringMax = data.timeline.typical_hiring_duration_months.max;
-  const visaMin = Math.min(...eligibleRoutes.map((r) => r.processing_time_months.min));
-  const visaMax = Math.max(...eligibleRoutes.map((r) => r.processing_time_months.max));
+  const visaMin = Math.min(
+    ...eligibleRoutes.map((r) => r.processing_time_months.min),
+  );
+  const visaMax = Math.max(
+    ...eligibleRoutes.map((r) => r.processing_time_months.max),
+  );
 
   return {
     hiring_phase_months: { min: hiringMin, max: hiringMax },
-    visa_processing_months: { min: Math.ceil(visaMin), max: Math.ceil(visaMax) },
-    total_estimated_months: { min: hiringMin + Math.ceil(visaMin), max: hiringMax + Math.ceil(visaMax) },
+    visa_processing_months: {
+      min: Math.ceil(visaMin),
+      max: Math.ceil(visaMax),
+    },
+    total_estimated_months: {
+      min: hiringMin + Math.ceil(visaMin),
+      max: hiringMax + Math.ceil(visaMax),
+    },
     fits_user_timeline: input.timeline_months >= hiringMin + Math.ceil(visaMin),
   };
 }
 
-function aggregateConfidence(data: DestinationRoleData): PlanOutput['data_confidence'] {
+function aggregateConfidence(
+  data: DestinationRoleData,
+): PlanOutput["data_confidence"] {
   const fields: Record<string, DataConfidenceLevel> = {
     salary: data.salary.data_confidence as DataConfidenceLevel,
-    work_authorisation: (data.work_authorisation_routes[0]?.data_confidence ?? 'estimated') as DataConfidenceLevel,
+    work_authorisation: (data.work_authorisation_routes[0]?.data_confidence ??
+      "estimated") as DataConfidenceLevel,
     timeline: data.timeline.data_confidence as DataConfidenceLevel,
     market_demand: data.market_demand.data_confidence as DataConfidenceLevel,
     credentials: data.credentials.data_confidence as DataConfidenceLevel,
   };
 
   const levels = Object.values(fields);
-  const overall: DataConfidenceLevel = levels.includes('placeholder')
-    ? 'placeholder'
-    : levels.includes('estimated')
-      ? 'estimated'
-      : 'verified';
+  const overall: DataConfidenceLevel = levels.includes("placeholder")
+    ? "placeholder"
+    : levels.includes("estimated")
+      ? "estimated"
+      : "verified";
 
   return { overall, fields };
 }
@@ -305,70 +383,78 @@ function buildActionSteps(
 ): ActionStep[] {
   const steps: ActionStep[] = [];
   const dest = data.destination;
-  const needsSponsorship = input.work_authorisation_constraint === 'needs_employer_sponsorship';
+  const needsSponsorship =
+    input.work_authorisation_constraint === "needs_employer_sponsorship";
   const langReqs = data.credentials.language_requirements;
 
   steps.push({
     rank: 1,
-    phase: 'Preparation',
-    title: 'Credential Verification',
+    phase: "Preparation",
+    title: "Credential Verification",
     description: `Get your academic credentials formally evaluated for ${dest}. ${data.credentials.degree_equivalency_notes}`,
     estimated_duration_weeks: 4,
-    priority: 'critical',
+    priority: "critical",
   });
 
   if (langReqs.length > 0) {
     steps.push({
       rank: steps.length + 1,
-      phase: 'Preparation',
-      title: 'Language Preparation',
-      description: `Review language requirements for ${dest}: ${langReqs.join('; ')}. Obtain relevant certifications early as they may be required for visa or employer applications.`,
+      phase: "Preparation",
+      title: "Language Preparation",
+      description: `Review language requirements for ${dest}: ${langReqs.join("; ")}. Obtain relevant certifications early as they may be required for visa or employer applications.`,
       estimated_duration_weeks: 12,
-      priority: 'medium',
+      priority: "medium",
     });
   }
 
   steps.push({
     rank: steps.length + 1,
-    phase: 'Job Search',
-    title: needsSponsorship ? 'Target Sponsorship-Ready Employers' : 'Begin Job Search',
+    phase: "Job Search",
+    title: needsSponsorship
+      ? "Target Sponsorship-Ready Employers"
+      : "Begin Job Search",
     description: needsSponsorship
       ? `Focus your search on employers in ${dest} who can sponsor your visa. International tech companies and large local firms are most likely to offer sponsorship. ${data.market_demand.notes}`
       : `Begin your job search in ${dest}. ${data.market_demand.notes}`,
     estimated_duration_weeks: 8,
-    priority: 'critical',
+    priority: "critical",
   });
 
   steps.push({
     rank: steps.length + 1,
-    phase: 'Application',
-    title: 'Tailor CV and Portfolio for Local Market',
-    description: `Adapt your CV to ${dest} market conventions. Research what local employers prioritise and highlight relevant qualifications: ${data.credentials.required_qualifications.join(', ')}.`,
+    phase: "Application",
+    title: "Tailor CV and Portfolio for Local Market",
+    description: `Adapt your CV to ${dest} market conventions. Research what local employers prioritise and highlight relevant qualifications: ${data.credentials.required_qualifications.join(", ")}.`,
     estimated_duration_weeks: 2,
-    priority: 'high',
+    priority: "high",
   });
 
   const fastestRoute = eligibleRoutes.reduce(
-    (prev, curr) => (curr.processing_time_months.min < prev.processing_time_months.min ? curr : prev),
+    (prev, curr) =>
+      curr.processing_time_months.min < prev.processing_time_months.min
+        ? curr
+        : prev,
     eligibleRoutes[0],
   );
 
   steps.push({
     rank: steps.length + 1,
-    phase: 'Visa Application',
+    phase: "Visa Application",
     title: `Apply for ${fastestRoute.name}`,
     description: `Once you have a job offer, initiate the ${fastestRoute.name} application. Processing typically takes ${fastestRoute.processing_time_months.min}–${fastestRoute.processing_time_months.max} months. Ensure all documents (degree certificate, offer letter, passport) are ready before submission.`,
-    estimated_duration_weeks: Math.round(fastestRoute.processing_time_months.max * 4),
-    priority: 'critical',
+    estimated_duration_weeks: Math.round(
+      fastestRoute.processing_time_months.max * 4,
+    ),
+    priority: "critical",
   });
 
   steps.push({
     rank: steps.length + 1,
-    phase: 'Relocation',
-    title: 'Pre-Relocation Planning',
+    phase: "Relocation",
+    title: "Pre-Relocation Planning",
     description: `Plan accommodation, banking, and local registration requirements for ${dest}. Research arrival formalities and any mandatory registrations required after entry.`,
     estimated_duration_weeks: 4,
-    priority: 'high',
+    priority: "high",
   });
 
   return steps;

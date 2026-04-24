@@ -1,6 +1,6 @@
-import { create } from 'zustand';
-import Cookies from 'js-cookie';
-import { auth } from '@/lib/api';
+import { create } from "zustand";
+import Cookies from "js-cookie";
+import { auth } from "@/lib/api";
 
 interface User {
   id: string;
@@ -18,27 +18,27 @@ interface AuthState {
 
 export const useAuthStore = create<AuthState>((set) => ({
   user: null,
-  token: Cookies.get('token') ?? null,
+  token: Cookies.get("token") ?? null,
   isLoading: false,
 
   setAuth: (user, token) => {
-    Cookies.set('token', token, { expires: 7 });
+    Cookies.set("token", token, { expires: 7 });
     set({ user, token });
   },
 
   logout: () => {
-    Cookies.remove('token');
+    Cookies.remove("token");
     set({ user: null, token: null });
   },
 
   checkAuth: async () => {
-    const token = Cookies.get('token');
+    const token = Cookies.get("token");
     if (!token) return;
     try {
       const res = await auth.me();
       set({ user: res.data.data });
     } catch {
-      Cookies.remove('token');
+      Cookies.remove("token");
       set({ user: null, token: null });
     }
   },

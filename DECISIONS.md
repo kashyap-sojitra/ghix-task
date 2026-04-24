@@ -5,11 +5,11 @@
 **Built:**
 - User registration, login, session management (JWT)
 - Plan generation from career profile input (deterministic + LLM)
-- Saved plans persisted per user (PostgreSQL via Prisma)
+- Saved plans persisted per user (Supabase PostgreSQL via Prisma)
 - Three deterministic edge case checks (timeline conflict, salary shortfall, missing data)
 - LLM narrative generation (Gemini 1.5 Flash, graceful fallback to `null`)
 - Structured `data_confidence` on all API responses
-- Reference data endpoints (`/api/v1/destinations`)
+- Reference data endpoint (`/api/v1/destinations`) — `/api/v1/destinations/[slug]/roles` was removed as dead code; roles are bundled in the destinations list response
 - Full React/Next.js frontend (register, login, generate, plans list, plan detail)
 
 **Explicitly skipped:**
@@ -18,6 +18,16 @@
 - PDF export
 - Email verification / password reset
 - Dockerized deployment (documented how to run manually)
+
+---
+
+## 1a. Database
+
+**Supabase (PostgreSQL)** is used as the database, connected via Prisma.
+
+- Transaction mode pooler URL (`port 6543`) is used for the application (`DATABASE_URL`) to support serverless/Next.js connection limits
+- Direct connection URL (`port 5432`) is used only for migrations (`DIRECT_URL`)
+- Schema managed via `prisma migrate dev` — `migration_lock.toml` is committed to version control as required by Prisma
 
 ---
 
@@ -66,9 +76,10 @@ The frontend displays per-section confidence badges so users know which parts of
 
 ## 4. LLM Choice
 
-**Primary: Gemini 1.5 Flash** (free tier)
+**Primary: Gemini** (free tier, model: `gemini-3.1-flash-lite-preview`)
 - Reasons: generous free tier, large context window (supports full plan JSON input), fast inference, good instruction-following
 - Configured via `LLM_PROVIDER=gemini` + `LLM_API_KEY`
+- Model name is intentionally not surfaced in the UI
 
 **Fallback: Ollama (local Llama 3)**
 - Reasons: zero API cost, fully private, no rate limits
@@ -103,7 +114,7 @@ The JWT-based auth is stateless by design, so horizontal scaling is architectura
 
 1. **Seed the data layer into PostgreSQL on first boot** rather than reading JSON files at runtime. This would allow: querying `SELECT DISTINCT destination FROM route_data`, better indexing, and admin-side data editing without deploy cycles. JSON files are fine for a prototype but create a maintenance burden as destinations scale.
 
-2. **Add a `prisma migrate deploy` health check at startup** so the app fails fast with a clear message if the DB schema is behind, rather than failing mysteriously at the first DB query.
+2. **Add a `prisma migrate deploy` health check at startup** so the app fails fast with a clear message if the DB schema is behind, rather than failing mysteriously at the first DB query. Currently migrations must be run manually via `npx prisma migrate deploy` before deploying.
 
 3. **Set up BullMQ from day one.** Adding a queue after the fact requires refactoring the `PlansController → PlansService → RelocationEngineService` call chain. It's a small refactor but easier to build queue-aware from the start.
 

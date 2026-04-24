@@ -1,4 +1,4 @@
-import { AuthError } from './auth';
+import { AuthError } from "./auth";
 
 export function ok(data: unknown, status = 200): Response {
   return Response.json(
@@ -7,26 +7,31 @@ export function ok(data: unknown, status = 200): Response {
       data,
       meta: { generated_at: new Date().toISOString() },
     },
-    { status }
+    { status },
   );
 }
 
-export function err(code: string, message: string, status: number, extra?: Record<string, unknown>): Response {
+export function err(
+  code: string,
+  message: string,
+  status: number,
+  extra?: Record<string, unknown>,
+): Response {
   return Response.json(
     { success: false, error: { code, message, ...extra } },
-    { status }
+    { status },
   );
 }
 
 export function handleError(e: unknown): Response {
   if (e instanceof AuthError) {
-    return err('UNAUTHORIZED', 'Unauthorized', 401);
+    return err("UNAUTHORIZED", "Unauthorized", 401);
   }
   if (e instanceof ApiError) {
     return err(e.code, e.message, e.status, e.extra);
   }
   console.error(e);
-  return err('INTERNAL_ERROR', 'An unexpected error occurred', 500);
+  return err("INTERNAL_ERROR", "An unexpected error occurred", 500);
 }
 
 export class ApiError extends Error {
@@ -34,7 +39,7 @@ export class ApiError extends Error {
     public code: string,
     message: string,
     public status: number,
-    public extra?: Record<string, unknown>
+    public extra?: Record<string, unknown>,
   ) {
     super(message);
   }
